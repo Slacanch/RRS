@@ -1,0 +1,37 @@
+#:import Factory kivy.factory.Factory
+
+<PopupTest>
+    text: 'lalalal'
+    size_hint: [0.4,0.4]
+    GridLayout:
+        cols: 2
+        Label:
+            text: "project"
+
+    Button:
+        text: 'sadf'
+        on_press: root.dismiss()
+
+<RootWidget>
+    BoxLayout:
+        orientation: 'vertical'
+        Label:
+        GridLayout:
+            cols: 4
+            Button:
+                id: connect
+                text: 'connect to job'
+                on_press: Factory.PopupTest().open()
+            Button:
+                id: disconnect
+                text: 'disconnect'
+            Button:
+                id: new_job
+                text: 'new job'
+            Button:
+                id: kill_job
+                text: 'kill job'
+        Label:
+            text: "will be list of jobs"
+        Label:
+            text: 'Log output box'

@@ -1,10 +1,20 @@
 import kivy
+from functools import partial
 from kivy.app import App
 from kivy.uix.label import Label
 from kivy.uix.button import Button
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.gridlayout import GridLayout
 from kivy.uix.popup import Popup
+from kivy.properties import DictProperty
+# maybe these should be withing the function that draws them?
+# kivy properties will automatically set attributes for the class they are bound to (?), maybe that's the way it's supposed to work.
+CURRENT_CONNECTIONS = {'project1': ['port', 'timeLeft'],
+                       'project2': ['port', 'timeLeft'],}
+
+
+SELECTED_JOBS = ''
+
 
 # CURRENT CONNECTION CLASSES
 ########################################################################
@@ -16,6 +26,7 @@ class CurrentConnection(Label):
         """Constructor"""
         super(CurrentConnection, self).__init__(**kwargs)
         pass
+
 
 
 # BUTTON GRID CLASSES
@@ -35,51 +46,6 @@ class ButtonGrid(GridLayout):
         # self.add_widget(Connect())
 
 
-class Connect(Button):
-    """add actual buttons"""
-
-    #----------------------------------------------------------------------
-    def __init__(self, **kwargs):
-        """Constructor"""
-
-        super(Connect, self).__init__(**kwargs)
-        self.background_color = 'red'
-        self.text = 'Connect to Server'
-
-# CURRENT JOBS CLASSES
-########################################################################
-class CurrentJobs(Label):
-    """"""
-
-    #----------------------------------------------------------------------
-    def __init__(self, **kwargs):
-        """Constructor"""
-        super(CurrentJobs, self).__init__(**kwargs)
-        pass
-
-# LOG OUTPUT CLASSES
-########################################################################
-class LogOutput(Label):
-    """"""
-
-    #----------------------------------------------------------------------
-    def __init__(self, **kwargs):
-        """Constructor"""
-        super(LogOutput, self).__init__(**kwargs)
-        pass
-
-
-# SPLASH SCREEN CLASSES
-#########################################################################
-class SplashScreen():
-    """show while initializing connections"""
-
-    #----------------------------------------------------------------------
-    def __init__(self):
-        """Constructor"""
-
-
-########################################################################
 class PopupTest(Popup):
     """"""
 
@@ -89,8 +55,45 @@ class PopupTest(Popup):
         super(PopupTest, self).__init__(**kwargs)
 
 
-#ROOT WIDGET
+
 ########################################################################
+class JobList(GridLayout):
+    """"""
+
+    #----------------------------------------------------------------------
+    def __init__(self, **kwargs):
+        """Constructor"""
+        super(JobList, self).__init__(**kwargs)
+
+        for i in CURRENT_CONNECTIONS:
+            job = CURRENT_CONNECTIONS[i]
+            but = Button()
+            but.text = str(i + job[0] +job[1])
+            if len(job) == 2:
+                CURRENT_CONNECTIONS[i].append(but)
+
+            but.bind(on_press = partial(self.selectStuff, i))  #
+            self.add_widget(but)
+
+    #----------------------------------------------------------------------
+    def selectStuff(self, key, instance):
+        """"""
+        SELECTED_JOBS = key
+        print(SELECTED_JOBS)
+        instance.background_color = (0.5, 1, 0.2, 1)
+
+        for i in CURRENT_CONNECTIONS:
+            if i == key:
+                continue
+            btn = CURRENT_CONNECTIONS[i][2]
+            btn.background_color = (1, 1, 1, 1)
+
+
+
+
+
+
+#ROOT WIDGET
 class RootWidget(BoxLayout):
     """"""
 
@@ -100,8 +103,15 @@ class RootWidget(BoxLayout):
         #initialize base window and set orientation
         super(RootWidget, self).__init__(**kwargs)
 
+    #----------------------------------------------------------------------
+    def changeProjects(*args):
+        """"""
+        CURRENT_CONNECTIONS['newproj'] = ['lalap', 'dereita']
 
-
+    #----------------------------------------------------------------------
+    def updateJobs(self, widget):
+        """"""
+        widget.do_layout()
 
 #########################################################################
 class GuiApp(App):

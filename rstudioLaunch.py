@@ -11,7 +11,7 @@ qrunCommand = f"qrun.sh -N singInstance -l h_rt={duration} -l h_vmem={vmem}"
 exCommand = (f'{qrunCommand} "singularity exec '
              f'-H /hpc/pmc_gen/tcandelli/ContainerTest/{project} '
              f'/hpc/pmc_gen/tcandelli/ContainerTest/rstudio.simg2 '
-             f'rserver"')
+             f'rserver --www-port=8500"')
 
 sshCommand = f"ssh hpc '{exCommand}'"
 
@@ -54,7 +54,7 @@ while True:
 print(nodeID)
 #3
 
-tunnelCommand = f'ssh -L 8787:{nodeID}:8787 hpc'
+tunnelCommand = f'ssh -L 8500:{nodeID}:8500 hpc'
 
 tunnel = subprocess.Popen(tunnelCommand, shell = True)
 

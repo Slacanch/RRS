@@ -16,8 +16,11 @@
     BoxLayout:
         orientation: 'vertical'
         Label:
+            size_hint: 1, 0.2
+            text: "YOU ARE NOT CONNECTED"
         GridLayout:
             cols: 4
+            size_hint: 1, 0.3
             Button:
                 id: connect
                 text: 'connect to job'
@@ -25,13 +28,17 @@
             Button:
                 id: disconnect
                 text: 'disconnect'
+                on_press: root.changeProjects()
+                on_release: root.updateJobs(joblist)
             Button:
                 id: new_job
                 text: 'new job'
             Button:
                 id: kill_job
                 text: 'kill job'
-        Label:
-            text: "will be list of jobs"
+        JobList:
+            id: joblist
+            cols: 1
+            size_hint: 1, 0.2
         Label:
             text: 'Log output box'

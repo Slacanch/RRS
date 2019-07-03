@@ -1,6 +1,7 @@
 import kivy
 import os
 import re
+import random
 import time
 import subprocess
 import pickle
@@ -13,21 +14,120 @@ from kivy.uix.button import Button
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.gridlayout import GridLayout
 from kivy.uix.popup import Popup
-from kivy.properties import DictProperty,  ListProperty, StringProperty
+from kivy.properties import DictProperty,  ListProperty, StringProperty, ObjectProperty
 from kivy.uix.scrollview import ScrollView
+from kivy.lang.builder import Builder
 # maybe these should be withing the function that draws them?
 # kivy properties will automatically set attributes for the class they are bound to (?), maybe that's the way it's supposed to work.
 
+Builder.load_string("""
+#:import Factory kivy.factory.Factory
+
+<ResourcePopup>
+    text: 'Resource settings'
+    size_hint: [0.4,0.4]
+    auto_dismiss: False
+    project: projectText
+    cpus: cpuText
+    memory: memText
+    duration: timeText
+    GridLayout:
+        cols: 2
+        Label:
+            text: "Project"
+        TextInput:
+            id: projectText
+        Label:
+            text: "Cpus (number)"
+        TextInput:
+            id: cpuText
+            hint_text: "1"
+        Label:
+            text: "Memory (GB)"
+        TextInput:
+            id: memText
+            hint_text: "8"
+        Label:
+            text: 'Time (hours)'
+        TextInput:
+            id: timeText
+            hint_text: "1"
+        Button:
+            text: 'confirm'
+            on_press: root.closeAndStart()
+
+<RootWidget>
+    id: rootwid
+    BoxLayout:
+        id: box
+        orientation: 'vertical'
+        Label:
+            id: connectionText
+            size_hint: 1, 0.2
+            text: "YOU ARE NOT CONNECTED"
+        GridLayout:
+            cols: 4
+            size_hint: 1, 0.3
+            Button:
+                id: connect
+                text: 'connect to job'
+                on_press: joblist.startThread(joblist.connectToJob)
+            Button:
+                id: disconnect
+                text: 'disconnect'
+                on_press: joblist.startThread(joblist.disconnectFromJob)
+            Button:
+                id: new_job
+                text: 'new job'
+                on_press:
+                    joblist.resPop.open()
+            Button:
+                id: kill_job
+                text: 'kill job'
+                on_press: joblist.startThread(joblist.deleteJob)
+        Label:
+            size_hint: 1, 0.1
+            text: 'Running Jobs'
+        JobList:
+            id: joblist
+            cols: 1
+            size_hint: 1, 0.5
+        Label:
+            size_hint: 1, 0.1
+            text: 'Log Output'
+        TestScroll:
+            LogOutput:
+                id: logOutputLabel
+                text: ''
+                font_size: 30
+                text_size: self.width, None
+                size_hint_y: None
+                height: self.texture_size[1]
+                multiline: True
+""")
 
 class ResourcePopup(Popup):
     """"""
+    project = ObjectProperty(None)
+    cpus = ObjectProperty(None)
+    memory = ObjectProperty(None)
+    duration = ObjectProperty(None)
 
     #----------------------------------------------------------------------
-    def __init__(self, **kwargs):
+    def __init__(self, jobList, **kwargs):
         """Constructor"""
         super(ResourcePopup, self).__init__(**kwargs)
+        self.joblist = jobList
 
-
+    #----------------------------------------------------------------------
+    def closeAndStart(self):
+        """"""
+        self.joblist.startThread(self.joblist.submitJob,
+                                 self.project.text,
+                                 self.cpus.text,
+                                 self.memory.text,
+                                 self.duration.text)
+        self.dismiss()
 
 
 
@@ -71,11 +171,10 @@ class JobList(GridLayout):
         """Constructor"""
         super(JobList, self).__init__(**kwargs)
         self.selectedJob = ''
+        self.resPop = ResourcePopup(self)
         if os.path.isfile('jobs.pkl'):
             loadedRunningJobs = pickle.load(open('jobs.pkl', 'rb'))
             self.runningJobs = self.checkJobs(loadedRunningJobs)
-
-
 
     #----------------------------------------------------------------------
     def checkJobs(self, loadedRunningJobs):
@@ -104,7 +203,9 @@ class JobList(GridLayout):
         for i in self.runningJobs:
             job = self.runningJobs[i]
             but = Button()  # size_hint_max_y = 0.5
-            but.text = str("project: " + i + "  on port: " + job[0] + "  will stop at: " + str(job[1]))
+            but.text = str("project: " + str(i) +
+                           "  on port: " + str(job[0]) +
+                           "  will stop at: " + str(job[1]))
             if i not in self.currentButtons:
                 self.currentButtons[i] = but
 
@@ -145,29 +246,44 @@ class JobList(GridLayout):
         threading.Thread(target = function, args = args).start()
 
     #----------------------------------------------------------------------
-    def submitJob(self):
+    def submitJob(self, project, cpus, memory, duration):
         """"""
-        resources = ResourcePopup()
-        resources.open()
-        project = 'testProject'
-        duration = '0:10:'
-        vmem = "3G"
-        port = '8787'
-        cps = '-p threaded=4 '
+        project = project
+        if not duration:
+            duration = '1'
+        duration = f'{duration}::'
+        if not memory:
+            memory = 8
+        vmem = f"{memory}G"
+        port = str(random.randint(8787, 10000))
+        if not cpus:
+            cpus = 1
+        cps = f'-p threaded={cpus} '
         logText = self.getLogFunction()
-        qrunCommand = f"qrun.sh -N singInstance -l h_rt={duration} -l h_vmem={vmem}"
+        qrunCommand = f"qrun.sh -N singInstance -l h_rt={duration} -l h_vmem={vmem} {cps}"
 
         exCommand = (f'{qrunCommand} "singularity exec '
-                     f'-H /hpc/pmc_gen/tcandelli/ContainerTest/{project} '
+                     f'-B /hpc/pmc_gen/rstudio/{project}/cookies:/tmp '  # /hpc/pmc_gen/tcandelli/ContainerTest/scratch{user}
+                     f'-H /hpc/pmc_gen/rstudio/{project} '
                      f'/hpc/pmc_gen/tcandelli/ContainerTest/rstudio.simg2 '
                      f'rserver --www-port={port}"')
+
+        # exCommand = (f'{qrunCommand} "singularity instance.start '
+        #             f'-H /hpc/pmc_gen/rstudio/{project} '
+        #             f'/hpc/pmc_gen/tcandelli/ContainerTest/rstudio.simg2 '
+        #             f'{project}; sleep 5; singularity exec '
+        #             f'instance://{project} rserver --www-port={port}"')
 
         sshCommand = f"ssh hpc '{exCommand}'"
 
         logText('submitting: ' + sshCommand + "\n")# self.startThread(logText, 'submitting: ' + sshCommand)  #
 
-        jobOutput = subprocess.check_output(sshCommand, shell = True)
-        logText(jobOutput.decode("utf-8"))
+        try:
+            jobOutput = subprocess.check_output(sshCommand, shell = True)
+            logText(jobOutput.decode("utf-8"))
+        except:
+            print("something went wrong, try again")
+            return 0
 
         #
 
@@ -240,7 +356,7 @@ class JobList(GridLayout):
 
             del self.runningJobs[selectedName]
 
-            if selectedName == self.currentConnection[1]:
+            if self.currentConnection and selectedName == self.currentConnection[1]:
                 self.currentConnection[0].kill()
                 self.currentConnection = []
 
@@ -262,6 +378,7 @@ class JobList(GridLayout):
         """"""
         if value:
             logText = self.getLogFunction()
+            time.sleep(3)
             self.parent.parent.ids.connectionText.text = f'YOU ARE CONNECTED TO {value[1]} ON PORT {value[2]}'
             self.parent.parent.ids.connectionText.background_color = 1, 0, 0, 1
             logText("...Success! you may now connect.")

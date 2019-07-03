@@ -63,19 +63,15 @@ Builder.load_string("""
         orientation: 'vertical'
         Label:
             id: connectionText
-            size_hint: 1, 0.2
+            size_hint: 1, 0.4
             text: "YOU ARE NOT CONNECTED"
         GridLayout:
             cols: 4
             size_hint: 1, 0.3
             Button:
                 id: connect
-                text: 'connect to job'
-                on_press: joblist.startThread(joblist.connectToJob)
-            Button:
-                id: disconnect
-                text: 'disconnect'
-                on_press: joblist.startThread(joblist.disconnectFromJob)
+                text: 'Reconnect to jobs'
+                on_press: joblist.startThread(joblist.reconnectAll)
             Button:
                 id: new_job
                 text: 'new job'
@@ -163,7 +159,7 @@ class JobList(GridLayout):
     runningJobs = DictProperty({}) # {'project1': ['port', 'timeLeft'], 'project2': ['port', 'timeLeft'],}
     currentButtons = {}
     connectionButtonIndex = 4
-    currentConnection = ListProperty([])
+    currentConnection = DictProperty({})
 
 
     #----------------------------------------------------------------------
@@ -179,20 +175,11 @@ class JobList(GridLayout):
     #----------------------------------------------------------------------
     def checkJobs(self, loadedRunningJobs):
         """"""
-        qstatOutput = subprocess.check_output("ssh hpc 'qstat'", shell = True)
-        qstatList = qstatOutput.decode("utf-8") .split("\n")[2:]
-
-        jobNumbers = []
-        for job in qstatList:
-            if job == '' :
-                continue
-            fields = job.split()
-            number = fields[0]
-            jobNumbers.append(number)
+        qstatTable = self.qstat()
 
         keys = loadedRunningJobs.keys()
         for i in list(keys):
-            if loadedRunningJobs[i][3] not in jobNumbers:
+            if i not in qstatTable:
                 del loadedRunningJobs[i]
         return loadedRunningJobs
 
@@ -246,9 +233,26 @@ class JobList(GridLayout):
         threading.Thread(target = function, args = args).start()
 
     #----------------------------------------------------------------------
+    def checkFolders(self, path):
+        """"""
+        command = f"if [ -d {path} ]; then echo exists; fi;"
+        exists = self.sshCommand(command)
+        return exists
+
+
+
+    #----------------------------------------------------------------------
     def submitJob(self, project, cpus, memory, duration):
         """"""
-        project = project
+        logText = self.getLogFunction()
+        cookiesPath = f'/hpc/pmc_gen/rstudio/{project}/cookies'
+        homePath = f'/hpc/pmc_gen/rstudio/{project}'
+
+        if not (self.checkFolders(homePath) and self.checkFolders(cookiesPath)):
+            logText(f'folder {homePath} or {cookiesPath} does not exist, '
+                    f'make sure to create them!')
+            return False
+
         if not duration:
             duration = '1'
         duration = f'{duration}::'
@@ -259,12 +263,12 @@ class JobList(GridLayout):
         if not cpus:
             cpus = 1
         cps = f'-p threaded={cpus} '
-        logText = self.getLogFunction()
+
         qrunCommand = f"qrun.sh -N singInstance -l h_rt={duration} -l h_vmem={vmem} {cps}"
 
         exCommand = (f'{qrunCommand} "singularity exec '
-                     f'-B /hpc/pmc_gen/rstudio/{project}/cookies:/tmp '  # /hpc/pmc_gen/tcandelli/ContainerTest/scratch{user}
-                     f'-H /hpc/pmc_gen/rstudio/{project} '
+                     f'-B {cookiesPath}:/tmp '  # /hpc/pmc_gen/tcandelli/ContainerTest/scratch{user}
+                     f'-H {homePath} '
                      f'/hpc/pmc_gen/tcandelli/ContainerTest/rstudio.simg2 '
                      f'rserver --www-port={port}"')
 
@@ -274,25 +278,16 @@ class JobList(GridLayout):
         #             f'{project}; sleep 5; singularity exec '
         #             f'instance://{project} rserver --www-port={port}"')
 
-        sshCommand = f"ssh hpc '{exCommand}'"
 
-        logText('submitting: ' + sshCommand + "\n")# self.startThread(logText, 'submitting: ' + sshCommand)  #
-
-        try:
-            jobOutput = subprocess.check_output(sshCommand, shell = True)
-            logText(jobOutput.decode("utf-8"))
-        except:
-            print("something went wrong, try again")
-            return 0
-
-        #
+        logText('submitting: ' + exCommand + "\n")# self.startThread(logText, 'submitting: ' + sshCommand)  #
+        jobOutput = self.sshCommand(exCommand)
+        logText(jobOutput)
 
         jobNumberPattern = re.compile("Your job (\d+) ")
-        jobNumber = jobNumberPattern.search(jobOutput.decode("utf-8") ).group(1)
+        jobNumber = jobNumberPattern.search(jobOutput).group(1)
 
         logText(f'Job number is {jobNumber}, waiting for job to run...\n')
 
-        nodePattern = re.compile("all.q@(n\d+).")
         nodeID = ''
         while True:
             if nodeID != '':
@@ -300,31 +295,52 @@ class JobList(GridLayout):
                 break
             else:
                 time.sleep(10)
-                logText(f'still waiting...\n')
+                logText(f'job is still in queue...\n')
 
-            qstatOutput = subprocess.check_output("ssh hpc 'qstat'", shell = True)
-            qstatList = qstatOutput.decode("utf-8") .split("\n")[2:]
+            qstatTable = self.qstat()
 
-            for job in qstatList:
-                if job == '' :
-                    continue
-                fields = job.split()
-                number = fields[0]
-                state = fields[4]
-                node = fields[7]
-
-                if number == jobNumber:
-                    if state == 'r':
-                        nodeID = nodePattern.search(node).group(1)
+            if jobNumber not in qstatTable:
+                logText('the submitted job is no longer in the queue, '
+                        'maybe it executed and shut down due to an error?')
+                return False
+            elif qstatTable[jobNumber][0] == 'r':
+                nodeID = qstatTable[jobNumber][1]
 
         self.updateRunningJobs(project, port, duration[0], nodeID, jobNumber)
         pickle.dump(dict(self.runningJobs), open('jobs.pkl', 'wb') )
+
+        self.startThread(self.connectToJob(jobNumber))
+
+    #----------------------------------------------------------------------
+    def qstat(self):
+        """"""
+        qstatOutput = self.sshCommand('qstat')
+        qstatList = qstatOutput.split("\n")[2:]
+
+        nodePattern = re.compile("all.q@(n\d+).")
+        qstatTable = {}
+        for job in qstatList:
+            if job == '' :
+                continue
+            fields = job.split()
+            number = fields[0]
+            state = fields[4]
+            node = fields[7]
+
+            if state == 'r':
+                nodeID = nodePattern.search(node).group(1)
+            else:
+                nodeID = ''
+
+            qstatTable[number] = [state, nodeID]
+
+        return qstatTable
 
     #----------------------------------------------------------------------
     def updateRunningJobs(self, name, port, time, nodeID, jobNumber):
         """"""
         stopTime = datetime.now() + timedelta(hours= int(time))
-        self.runningJobs.update({name: [port, stopTime, nodeID, jobNumber],})
+        self.runningJobs.update({jobNumber: [port, stopTime, nodeID, name],})
 
     #----------------------------------------------------------------------
     def getSelectedJob(self):
@@ -340,38 +356,51 @@ class JobList(GridLayout):
     def sshCommand(self, command):
         """"""
         sshCommand = f"ssh hpc '{command}'"
-        jobOutput = subprocess.check_output(sshCommand, shell = True)
+        try:
+            jobOutput = subprocess.check_output(sshCommand, shell = True)
+        except subprocess.CalledProcessError as e:
+            logText = self.getLogFunction()
+            logText(f'Exit code {e.returncode} when executing {e.cmd}')
+            return False
         return jobOutput.decode("utf-8")
 
     #----------------------------------------------------------------------
     def deleteJob(self):
         """"""
-        selectedName = self.getSelectedJob()
-        if selectedName:
+        selectedJobN = self.getSelectedJob()
+        if selectedJobN:
             logText = self.getLogFunction()
-            jobNumber = self.runningJobs[selectedName][3]
-            command = f'qdel {jobNumber}'
+            command = f'qdel {selectedJobN}'
             commandOutput = self.sshCommand(command)
             logText(commandOutput)
 
-            del self.runningJobs[selectedName]
-
-            if self.currentConnection and selectedName == self.currentConnection[1]:
-                self.currentConnection[0].kill()
-                self.currentConnection = []
+            self.currentConnection[selectedJobN][0].kill()
+            del self.runningJobs[selectedJobN]
+            del self.currentConnection[selectedJobN]
 
     #----------------------------------------------------------------------
-    def connectToJob(self):
+    def reconnectAll(self):
         """"""
-        selectedName = self.getSelectedJob()
-        if selectedName:
-            logText = self.getLogFunction()
-            port = self.runningJobs[selectedName][0]
-            nodeID = self.runningJobs[selectedName][2]
-            tunnelCommand = f'ssh -L {port}:{nodeID}:{port} hpc'
-            logText('setting up tunnel...')
-            tunnel = subprocess.Popen(tunnelCommand, shell = True)
-            self.currentConnection = [tunnel, selectedName, port]
+        logText = self.getLogFunction()
+        logText('Reconnecting to all jobs...')
+        for jobNumber in self.runningJobs:
+            if jobNumber in self.currentConnection:
+                self.currentConnection[jobNumber][0].kill()
+            self.connectToJob(jobNumber)
+        time.sleep(3)
+        logText('...Reconnected.')
+
+    #----------------------------------------------------------------------
+    def connectToJob(self, jobNumber):
+        """"""
+        port = self.runningJobs[jobNumber][0]
+        nodeID = self.runningJobs[jobNumber][2]
+        projectName = self.runningJobs[jobNumber][3]
+        tunnelCommand = f'ssh -L {port}:{nodeID}:{port} hpc'
+        tunnel = subprocess.Popen(tunnelCommand, shell = True)
+        if jobNumber in self.currentConnection:
+            del self.currentConnection[jobNumber]
+        self.currentConnection[jobNumber] = [tunnel, port, projectName]
 
     #----------------------------------------------------------------------
     def on_currentConnection(self, instance, value):
@@ -379,9 +408,12 @@ class JobList(GridLayout):
         if value:
             logText = self.getLogFunction()
             time.sleep(3)
-            self.parent.parent.ids.connectionText.text = f'YOU ARE CONNECTED TO {value[1]} ON PORT {value[2]}'
-            self.parent.parent.ids.connectionText.background_color = 1, 0, 0, 1
-            logText("...Success! you may now connect.")
+            tempText = ''
+            for jobNumber in value:
+                connection = value[jobNumber]
+                tempText += f'YOU ARE CONNECTED TO {connection[2]} ON PORT {connection[1]}\n'
+            self.parent.parent.ids.connectionText.text = tempText
+            self.parent.parent.ids.connectionText.background_color = 0.5, 0, 0, 1
         else:
             self.parent.parent.ids.connectionText.text = "YOU ARE NOT CONNECTED"
             self.parent.parent.ids.connectionText.background_color = 1, 1, 1, 1
@@ -391,12 +423,6 @@ class JobList(GridLayout):
         """"""
         return self.parent.parent.ids.logOutputLabel.logText
 
-    #----------------------------------------------------------------------
-    def disconnectFromJob(self):
-        """"""
-        if self.currentConnection:
-            self.currentConnection[0].kill()
-            self.currentConnection = []
 
 #ROOT WIDGET
 class RootWidget(BoxLayout):

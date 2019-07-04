@@ -269,8 +269,9 @@ class JobList(GridLayout):
         exCommand = (f'{qrunCommand} "singularity exec '
                      f'-B {cookiesPath}:/tmp '  # /hpc/pmc_gen/tcandelli/ContainerTest/scratch{user}
                      f'-H {homePath} '
+                     f'-B /hpc/pmc_gen/tcandelli/ContainerTest/scratchTito:/var/log '
                      f'/hpc/pmc_gen/tcandelli/ContainerTest/rstudio.simg2 '
-                     f'rserver --www-port={port}"')
+                     f'rserver --www-port={port} --auth-minimum-user-id=100 "')
 
         # exCommand = (f'{qrunCommand} "singularity instance.start '
         #             f'-H /hpc/pmc_gen/rstudio/{project} '

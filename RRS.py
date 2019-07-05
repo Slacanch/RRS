@@ -1,28 +1,26 @@
-import kivy
 import os
 import re
-import random
 import time
-import subprocess
+import kivy
+import random
 import pickle
 import threading
-from datetime import datetime, timedelta
+import webbrowser
+import subprocess
 from functools import partial
+from datetime import datetime, timedelta
 from kivy.app import App
+from kivy.clock import Clock
 from kivy.uix.label import Label
+from kivy.uix.popup import Popup
 from kivy.uix.button import Button
+from kivy.lang.builder import Builder
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.gridlayout import GridLayout
-from kivy.uix.popup import Popup
-from kivy.properties import DictProperty,  ListProperty, StringProperty, ObjectProperty
 from kivy.uix.scrollview import ScrollView
-from kivy.lang.builder import Builder
-# maybe these should be withing the function that draws them?
-# kivy properties will automatically set attributes for the class they are bound to (?), maybe that's the way it's supposed to work.
+from kivy.properties import DictProperty,  ListProperty, StringProperty, ObjectProperty
 
 Builder.load_string("""
-#:import Factory kivy.factory.Factory
-
 <ResourcePopup>
     text: 'Resource settings'
     size_hint: [0.4,0.4]
@@ -69,6 +67,10 @@ Builder.load_string("""
             cols: 4
             size_hint: 1, 0.3
             Button:
+                id: browser
+                text: 'Open in browser'
+                on_press: joblist.startThread(joblist.openBrowser)
+            Button:
                 id: connect
                 text: 'Reconnect to jobs'
                 on_press: joblist.startThread(joblist.reconnectAll)
@@ -113,6 +115,7 @@ class ResourcePopup(Popup):
     def __init__(self, jobList, **kwargs):
         """Constructor"""
         super(ResourcePopup, self).__init__(**kwargs)
+        self.title = 'Required Resources'
         self.joblist = jobList
 
     #----------------------------------------------------------------------
@@ -156,11 +159,10 @@ class TestScroll(ScrollView):
 
 class JobList(GridLayout):
     """"""
-    runningJobs = DictProperty({}) # {'project1': ['port', 'timeLeft'], 'project2': ['port', 'timeLeft'],}
+    runningJobs = DictProperty({}) # {jobnumber: [port, stopTime, nodeID, name]}
     currentButtons = {}
     connectionButtonIndex = 4
     currentConnection = DictProperty({})
-
 
     #----------------------------------------------------------------------
     def __init__(self, **kwargs):
@@ -171,6 +173,30 @@ class JobList(GridLayout):
         if os.path.isfile('jobs.pkl'):
             loadedRunningJobs = pickle.load(open('jobs.pkl', 'rb'))
             self.runningJobs = self.checkJobs(loadedRunningJobs)
+            if self.runningJobs:
+                Clock.schedule_once(self.reconnectAll, 3)
+
+    #----------------------------------------------------------------------
+    def openBrowser(self):
+        """"""
+        selectedJobN = self.getSelectedJob()
+        if selectedJobN:
+            port = self.runningJobs[selectedJobN][0]
+            url = f'http://localhost:{port}'
+            webbrowser.open_new_tab(url)
+
+    #----------------------------------------------------------------------
+    def countDown(self, pls):
+        """"""
+        if not self.runningJobs:
+            return False
+        for i in self.runningJobs:
+            project = self.runningJobs[i][3]
+            endTime = self.runningJobs[i][1]
+            delta = endTime - datetime.now()
+            self.currentButtons[i].text = str("job for project " + str(project) +
+                                              "  will stop in: " + str(delta).split('.')[0])
+        return True
 
     #----------------------------------------------------------------------
     def checkJobs(self, loadedRunningJobs):
@@ -190,14 +216,15 @@ class JobList(GridLayout):
         for i in self.runningJobs:
             job = self.runningJobs[i]
             but = Button()  # size_hint_max_y = 0.5
-            but.text = str("project: " + str(i) +
-                           "  on port: " + str(job[0]) +
-                           "  will stop at: " + str(job[1]))
+            # but.text = str("project: " + str(i) +
+            #               "  on port: " + str(job[0]) +
+            #               "  will stop at: " + str(job[1]))
             if i not in self.currentButtons:
                 self.currentButtons[i] = but
 
             but.bind(on_press = partial(self.selectStuff, i))  #shohuld be moved to kv file
             self.add_widget(but)
+        Clock.schedule_interval(self.countDown, 1)
 
     #----------------------------------------------------------------------
     def removeButtons(self):
@@ -248,7 +275,7 @@ class JobList(GridLayout):
         cookiesPath = f'/hpc/pmc_gen/rstudio/{project}/cookies'
         homePath = f'/hpc/pmc_gen/rstudio/{project}'
 
-        if not (self.checkFolders(homePath) and self.checkFolders(cookiesPath)):
+        if not (self.checkFolders(cookiesPath)):
             logText(f'folder {homePath} or {cookiesPath} does not exist, '
                     f'make sure to create them!')
             return False
@@ -265,20 +292,12 @@ class JobList(GridLayout):
         cps = f'-p threaded={cpus} '
 
         qrunCommand = f"qrun.sh -N singInstance -l h_rt={duration} -l h_vmem={vmem} {cps}"
-
+        rserverOptions = f"--www-port={port} --auth-minimum-user-id=100 --server-set-umask=0"
         exCommand = (f'{qrunCommand} "singularity exec '
-                     f'-B {cookiesPath}:/tmp '  # /hpc/pmc_gen/tcandelli/ContainerTest/scratch{user}
+                     f'-B {cookiesPath}:/tmp '
                      f'-H {homePath} '
-                     f'-B /hpc/pmc_gen/tcandelli/ContainerTest/scratchTito:/var/log '
                      f'/hpc/pmc_gen/tcandelli/ContainerTest/rstudio.simg2 '
-                     f'rserver --www-port={port} --auth-minimum-user-id=100 "')
-
-        # exCommand = (f'{qrunCommand} "singularity instance.start '
-        #             f'-H /hpc/pmc_gen/rstudio/{project} '
-        #             f'/hpc/pmc_gen/tcandelli/ContainerTest/rstudio.simg2 '
-        #             f'{project}; sleep 5; singularity exec '
-        #             f'instance://{project} rserver --www-port={port}"')
-
+                     f'rserver {rserverOptions} "')
 
         logText('submitting: ' + exCommand + "\n")# self.startThread(logText, 'submitting: ' + sshCommand)  #
         jobOutput = self.sshCommand(exCommand)
@@ -380,7 +399,7 @@ class JobList(GridLayout):
             del self.currentConnection[selectedJobN]
 
     #----------------------------------------------------------------------
-    def reconnectAll(self):
+    def reconnectAll(self, pls):
         """"""
         logText = self.getLogFunction()
         logText('Reconnecting to all jobs...')
@@ -450,7 +469,7 @@ class GuiApp(App):
     #----------------------------------------------------------------------
     def build(self):
         """Constructor"""
-        self.title = 'Single Cell Project Manager V0.01'
+        self.title = 'Rstudio Reproducibility Suite V0.1'
         return RootWidget()
 
 

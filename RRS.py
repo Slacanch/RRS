@@ -1,6 +1,7 @@
 import os
 import re
 import time
+import json
 import kivy
 import random
 import pickle
@@ -54,8 +55,39 @@ Builder.load_string("""
             text: 'confirm'
             on_press: root.closeAndStart()
 
+<ConfigPopup>
+    text: 'Settings'
+    size_hint: [0.6,0.4]
+    auto_dismiss: False
+    projectPath: projectPathText
+    host: hostText
+    imgName: imgNameText
+    GridLayout:
+        cols: 2
+        Label:
+            text: "Path to project folders"
+        TextInput:
+            id: projectPathText
+            hint_text: root.currProjectPath
+        Label:
+            text: "Name of the hpc host"
+        TextInput:
+            id: hostText
+            hint_text: root.currHost
+        Label:
+            text: "Singularity image name"
+        TextInput:
+            id: imgNameText
+            hint_text: root.currImgName
+        Button:
+            text: 'confirm'
+            on_press: root.closeAndStart()
+        Button:
+            text: 'cancel'
+            on_press: root.dismiss()
 <RootWidget>
     id: rootwid
+    logOutputLabel: logOutputLabel
     BoxLayout:
         id: box
         orientation: 'vertical'
@@ -64,7 +96,7 @@ Builder.load_string("""
             size_hint: 1, 0.4
             text: "YOU ARE NOT CONNECTED"
         GridLayout:
-            cols: 4
+            cols: 5
             size_hint: 1, 0.3
             Button:
                 id: browser
@@ -83,11 +115,17 @@ Builder.load_string("""
                 id: kill_job
                 text: 'kill job'
                 on_press: joblist.startThread(joblist.deleteJob)
+            Button:
+                id: config
+                size_hint: 0.3, 0.3
+                text: 'settings'
+                on_press: joblist.confOpen.open()
         Label:
             size_hint: 1, 0.1
             text: 'Running Jobs'
         JobList:
             id: joblist
+            logOutput: root.logOutputLabel
             cols: 1
             size_hint: 1, 0.5
         Label:
@@ -128,9 +166,58 @@ class ResourcePopup(Popup):
                                  self.duration.text)
         self.dismiss()
 
+#----------------------------------------------------------------------
+def readConfig():
+    """read config file from home"""
+    configPath = os.path.expanduser("~/.RRS_config")
+    if os.path.isfile(configPath):
+        confDict = json.load(open(configPath))
+
+        return confDict
+    else:
+        defaultSSHHost = 'hpc'
+        defaultProjectPath = '/hpc/pmc_gen/rstudio/'
+        defaultImg = 'rstudio.simg'
+        confDict = {'host': defaultSSHHost,
+                    'projectPath': defaultProjectPath,
+                    'imgName': defaultImg,}
+
+        return confDict
+
+class ConfigPopup(Popup):
+    """"""
+
+    projectPath = ObjectProperty(None)
+    host = ObjectProperty(None)
+    imgName = ObjectProperty(None)
+
+    currConfig = readConfig()
+    currProjectPath = StringProperty(currConfig['projectPath'])
+    currHost = StringProperty(currConfig['host'])
+    currImgName = StringProperty(currConfig['imgName'])
+
+    #----------------------------------------------------------------------
+    def __init__(self, jobList, configDict, **kwargs):
+        """Constructor"""
+        super(ConfigPopup, self).__init__(**kwargs)
+        self.title = 'Settings'
+        self.joblist = jobList
+    #----------------------------------------------------------------------
+    def closeAndStart(self):
+        """"""
+
+        currConfigDict = self.currConfig
+        newConfigDict = {'host': self.host.text,
+                         'projectPath': self.projectPath.text,
+                         'imgName': self.imgName.text,}
+        for i in currConfigDict:
+            if newConfigDict[i]:
+                currConfigDict[i] = newConfigDict[i]
 
 
-
+        self.joblist.configDict = currConfigDict
+        self.joblist.saveConfig()
+        self.dismiss()
 
 class LogOutput(Label):
     """"""
@@ -163,18 +250,43 @@ class JobList(GridLayout):
     currentButtons = {}
     connectionButtonIndex = 4
     currentConnection = DictProperty({})
-
+    configDict = readConfig()
+    logOutput = ObjectProperty(None)
     #----------------------------------------------------------------------
     def __init__(self, **kwargs):
         """Constructor"""
         super(JobList, self).__init__(**kwargs)
         self.selectedJob = ''
         self.resPop = ResourcePopup(self)
+        self.confOpen = ConfigPopup(self, self.configDict)
         if os.path.isfile('jobs.pkl'):
             loadedRunningJobs = pickle.load(open('jobs.pkl', 'rb'))
-            self.runningJobs = self.checkJobs(loadedRunningJobs)
+            if self.checkHPCConnection():
+                self.runningJobs = self.checkJobs(loadedRunningJobs)
+            else:
+                Clock.schedule_once(self.nonFunctionalSSH, 3)
             if self.runningJobs:
                 Clock.schedule_once(self.reconnectAll, 3)
+
+    #----------------------------------------------------------------------
+    def nonFunctionalSSH(self, *args):
+        """"""
+        textLog = self.getLogFunction()
+        textLog('invalid SSH host, use settings to set the correct name!')
+    #----------------------------------------------------------------------
+    def checkHPCConnection(self):
+        """"""
+        check = self.sshCommand('echo gooby')
+        return check
+
+    #----------------------------------------------------------------------
+    def saveConfig(self):
+        """"""
+        logText = self.getLogFunction()
+        logText('saving configuration...')
+        configFile = os.path.expanduser("~/.RRS_config")
+        json.dump(self.configDict, open(configFile, 'w'))
+        logText("saved!")
 
     #----------------------------------------------------------------------
     def openBrowser(self):
@@ -201,13 +313,14 @@ class JobList(GridLayout):
     #----------------------------------------------------------------------
     def checkJobs(self, loadedRunningJobs):
         """"""
-        qstatTable = self.qstat()
 
-        keys = loadedRunningJobs.keys()
-        for i in list(keys):
-            if i not in qstatTable:
-                del loadedRunningJobs[i]
-        return loadedRunningJobs
+        qstatTable = self.qstat()
+        if qstatTable:
+            keys = loadedRunningJobs.keys()
+            for i in list(keys):
+                if i not in qstatTable:
+                    del loadedRunningJobs[i]
+                return loadedRunningJobs
 
     #----------------------------------------------------------------------
     def drawButtons(self):
@@ -215,10 +328,7 @@ class JobList(GridLayout):
 
         for i in self.runningJobs:
             job = self.runningJobs[i]
-            but = Button()  # size_hint_max_y = 0.5
-            # but.text = str("project: " + str(i) +
-            #               "  on port: " + str(job[0]) +
-            #               "  will stop at: " + str(job[1]))
+            but = Button()
             if i not in self.currentButtons:
                 self.currentButtons[i] = but
 
@@ -266,14 +376,15 @@ class JobList(GridLayout):
         exists = self.sshCommand(command)
         return exists
 
-
-
     #----------------------------------------------------------------------
     def submitJob(self, project, cpus, memory, duration):
         """"""
         logText = self.getLogFunction()
-        cookiesPath = f'/hpc/pmc_gen/rstudio/{project}/cookies'
-        homePath = f'/hpc/pmc_gen/rstudio/{project}'
+        projectPath = self.configDict['projectPath']
+        imgName = self.configDict['imgName']
+        cookiesPath = f'{projectPath}{project}/cookies'
+        homePath = f'{projectPath}{project}'
+        imagePath = f'{projectPath}{imgName}'
 
         if not (self.checkFolders(cookiesPath)):
             logText(f'folder {homePath} or {cookiesPath} does not exist, '
@@ -296,7 +407,7 @@ class JobList(GridLayout):
         exCommand = (f'{qrunCommand} "singularity exec '
                      f'-B {cookiesPath}:/tmp '
                      f'-H {homePath} '
-                     f'/hpc/pmc_gen/tcandelli/ContainerTest/rstudio.simg2 '
+                     f'{imagePath} '
                      f'rserver {rserverOptions} "')
 
         logText('submitting: ' + exCommand + "\n")# self.startThread(logText, 'submitting: ' + sshCommand)  #
@@ -375,12 +486,16 @@ class JobList(GridLayout):
     #----------------------------------------------------------------------
     def sshCommand(self, command):
         """"""
-        sshCommand = f"ssh hpc '{command}'"
+        host = self.configDict['host']
+        sshCommand = f"ssh {host} '{command}'"
         try:
             jobOutput = subprocess.check_output(sshCommand, shell = True)
         except subprocess.CalledProcessError as e:
-            logText = self.getLogFunction()
-            logText(f'Exit code {e.returncode} when executing {e.cmd}')
+            try:
+                logText = self.getLogFunction()
+                logText(f'Exit code {e.returncode} when executing {e.cmd}')
+            except AttributeError:
+                return False
             return False
         return jobOutput.decode("utf-8")
 
@@ -399,7 +514,7 @@ class JobList(GridLayout):
             del self.currentConnection[selectedJobN]
 
     #----------------------------------------------------------------------
-    def reconnectAll(self, pls):
+    def reconnectAll(self, *args):
         """"""
         logText = self.getLogFunction()
         logText('Reconnecting to all jobs...')
@@ -413,10 +528,11 @@ class JobList(GridLayout):
     #----------------------------------------------------------------------
     def connectToJob(self, jobNumber):
         """"""
+        host = self.configDict['host']
         port = self.runningJobs[jobNumber][0]
         nodeID = self.runningJobs[jobNumber][2]
         projectName = self.runningJobs[jobNumber][3]
-        tunnelCommand = f'ssh -L {port}:{nodeID}:{port} hpc'
+        tunnelCommand = f'ssh -L {port}:{nodeID}:{port} {host}'
         tunnel = subprocess.Popen(tunnelCommand, shell = True)
         if jobNumber in self.currentConnection:
             del self.currentConnection[jobNumber]
@@ -444,22 +560,18 @@ class JobList(GridLayout):
         return self.parent.parent.ids.logOutputLabel.logText
 
 
+
 #ROOT WIDGET
 class RootWidget(BoxLayout):
     """"""
-
+    logOutputLabel = ObjectProperty(None)
     #----------------------------------------------------------------------
     def __init__(self, **kwargs):
         """Constructor"""
         #initialize base window and set orientation
         super(RootWidget, self).__init__(**kwargs)
 
-    #----------------------------------------------------------------------
-    def changeProjects(self, widget):
-        """"""
-        # widget.removeButtons()
-        widget.runningJobs['newproj'] = ['lalap', 'dereita']
-        # widget.drawButtons()
+
 
 
 #########################################################################
@@ -474,8 +586,9 @@ class GuiApp(App):
 
 
 
-
 if __name__ == '__main__':
+
+
     GuiApp().run()
 
 

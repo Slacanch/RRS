@@ -147,6 +147,7 @@ Builder.load_string("""
                 multiline: True
 """)
 
+
 class ResourcePopup(Popup):
     """"""
     project = ObjectProperty(None)
@@ -275,15 +276,29 @@ class JobList(GridLayout):
         self.selectedJob = ''
         self.resPop = ResourcePopup(self)
         self.confOpen = ConfigPopup(self, self.configDict)
-        if os.path.isfile('jobs.pkl'):
-            loadedRunningJobs = pickle.load(open('jobs.pkl', 'rb'))
+        self.startThread(self.startup)
+
+
+    #----------------------------------------------------------------------
+    def startup(self, ):
+        """"""
+        time.sleep(0.5)
+        logText = self.getLogFunction()
+        logText('checking connection and loading running jobs if present...')
+
+        userHomePath = os.path.expanduser("~/")
+        if os.path.isfile(userHomePath + '.jobs.pkl'):
+            loadedRunningJobs = pickle.load(open(userHomePath + '.jobs.pkl', 'rb'))
             if self.checkHPCConnection():
                 self.runningJobs =  self.checkJobs(loadedRunningJobs)
+                logText('Done!')
             else:
                 self.runningJobs = {}
-                Clock.schedule_once(self.nonFunctionalSSH, 3)
+                self.nonFunctionalSSH()
             if self.runningJobs:
-                Clock.schedule_once(self.reconnectAll, 3)
+                self.reconnectAll()
+
+
 
     #----------------------------------------------------------------------
     def nonFunctionalSSH(self, *args):
@@ -332,7 +347,7 @@ class JobList(GridLayout):
             deltaReadable = str(delta).split('.')[0]
             self.currentButtons[i].text = str("job for project " + str(project) +
                                               "  will stop in: " + deltaReadable)
-            if deltaReadable == '0:59:01':
+            if deltaReadable == '0:00:01':
                 textLog = self.getLogFunction()
                 textLog(f'{project} job with number {i} has expired and will be closed.')
                 if self.currentConnection[i]:
@@ -351,7 +366,7 @@ class JobList(GridLayout):
             for i in list(keys):
                 if i not in qstatTable:
                     del loadedRunningJobs[i]
-                return loadedRunningJobs
+            return loadedRunningJobs
         else:
             return {}
 
@@ -433,15 +448,17 @@ class JobList(GridLayout):
         port = str(random.randint(8787, 10000))
         if not cpus:
             cpus = 1
-        cps = f'-p threaded={cpus} '
-
-        qrunCommand = f"qrun.sh -N singInstance -l h_rt={duration} -l h_vmem={vmem} {cps}"
+        cps = f'-pe threaded {cpus} '
+        qsub = 'qsub -b yes -cwd -V -q all.q -N singInstance '
+        qrunCommand = f"{qsub} -l h_rt={duration} -l h_vmem={vmem} {cps}"
         rserverOptions = f"--www-port={port} --auth-minimum-user-id=100 --server-set-umask=0"
         exCommand = (f'{qrunCommand} "singularity exec '
                      f'-B {cookiesPath}:/tmp '
                      f'-H {homePath} '
                      f'{imagePath} '
                      f'rserver {rserverOptions} "')
+
+
 
         logText('submitting: ' + exCommand + "\n")# self.startThread(logText, 'submitting: ' + sshCommand)  #
         jobOutput = self.sshCommand(exCommand)
@@ -471,7 +488,8 @@ class JobList(GridLayout):
                 nodeID = qstatTable[jobNumber][1]
 
         self.updateRunningJobs(project, port, duration[0], nodeID, jobNumber)
-        pickle.dump(dict(self.runningJobs), open('jobs.pkl', 'wb') )
+        userHomePath = os.path.expanduser("~/")
+        pickle.dump(dict(self.runningJobs), open(userHomePath + '.jobs.pkl', 'wb') )
 
         self.startThread(self.connectToJob(jobNumber))
 
@@ -539,9 +557,13 @@ class JobList(GridLayout):
         selectedJobN = self.getSelectedJob()
         if selectedJobN:
             logText = self.getLogFunction()
-            command = f'qdel {selectedJobN}'
-            commandOutput = self.sshCommand(command)
-            logText(commandOutput)
+            qstatTable = self.qstat
+            if selectedJobN in qstatTable and qstatTable[selectedJobN][0] == 'r':
+                command = f'qdel {selectedJobN}'
+                commandOutput = self.sshCommand(command)
+                logText(commandOutput)
+            else:
+                logText(f'Job number {selectedJobN} is already shut down.')
 
             self.currentConnection[selectedJobN][0].kill()
             del self.runningJobs[selectedJobN]
@@ -553,6 +575,7 @@ class JobList(GridLayout):
         logText = self.getLogFunction()
         logText('Reconnecting to all jobs...')
         i = 0
+
         for jobNumber in self.runningJobs:
             i += 1
             if jobNumber in self.currentConnection:
@@ -625,6 +648,7 @@ class GuiApp(App):
     #----------------------------------------------------------------------
     def build(self):
         """Constructor"""
+        self.icon = 'RRS_logo.png'
         self.title = 'Rstudio Reproducibility Suite V0.1'
         return RootWidget()
 

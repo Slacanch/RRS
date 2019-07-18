@@ -4,9 +4,11 @@ import time
 import json
 import kivy
 import random
+import paramiko
 import pickle
 import threading
 import webbrowser
+from sshtunnel import SSHTunnelForwarder
 import subprocess
 from functools import partial
 from datetime import datetime, timedelta
@@ -20,6 +22,14 @@ from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.gridlayout import GridLayout
 from kivy.uix.scrollview import ScrollView
 from kivy.properties import DictProperty,  ListProperty, StringProperty, ObjectProperty
+
+# configure connection check to try and get the host information out
+# if it fails at any point, return false and have hpcconectioncheck
+# funtion say that the ssh host is not configured correctly
+# if the host configures correctly, try to run a command,
+# if it fails, say that the host does not allow connection for some
+# reason.
+
 
 Builder.load_string("""
 <ResourcePopup>
@@ -276,8 +286,31 @@ class JobList(GridLayout):
         self.selectedJob = ''
         self.resPop = ResourcePopup(self)
         self.confOpen = ConfigPopup(self, self.configDict)
+        self.ssh = self.sshObjectInit()
         self.startThread(self.startup)
 
+    #----------------------------------------------------------------------
+    def sshObjectInit(self):
+        """"""
+
+        ssh_config = paramiko.SSHConfig()
+        user_config_file = os.path.expanduser("~/.ssh/config")
+        if os.path.exists(user_config_file):
+            with open(user_config_file) as f:
+                ssh_config.parse(f)
+
+        hpcConfig = ssh_config.lookup(self.configDict['host'])
+        if 'proxycommand' in hpcConfig:
+            proxy = paramiko.ProxyCommand(hpcConfig['proxycommand'])
+
+
+        client = paramiko.SSHClient()
+        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        client.load_system_host_keys()
+
+        client.connect(hpcConfig['hostname'], username= hpcConfig['user'], sock=proxy)
+
+        return client
 
     #----------------------------------------------------------------------
     def startup(self, ):
@@ -312,6 +345,7 @@ class JobList(GridLayout):
     #----------------------------------------------------------------------
     def checkHPCConnection(self, host = ''):
         """"""
+
         check = self.sshCommand('echo gooby', host)
         return check
 
@@ -351,7 +385,7 @@ class JobList(GridLayout):
                 textLog = self.getLogFunction()
                 textLog(f'{project} job with number {i} has expired and will be closed.')
                 if self.currentConnection[i]:
-                    self.currentConnection[i][0].kill()
+                    self.currentConnection[i][0].close()
                 del self.runningJobs[i]
                 del self.currentConnection[i]
         return True
@@ -535,21 +569,17 @@ class JobList(GridLayout):
             return 0
 
     #----------------------------------------------------------------------
-    def sshCommand(self, command, host = ''):
+    def sshCommand(self, command, ssh = None):
         """"""
-        if not host:
-            host = self.configDict['host']
-        sshCommand = f"ssh {host} '{command}'"
+        if not ssh:
+            ssh = self.ssh
         try:
-            jobOutput = subprocess.check_output(sshCommand, shell = True)
-        except subprocess.CalledProcessError as e:
-            try:
-                logText = self.getLogFunction()
-                logText(f'Exit code {e.returncode} when executing {e.cmd}')
-            except AttributeError:
-                return False
+            (stdin, stdout, stderr) = ssh.exec_command(command)
+        except :
+            print('SSH PROBLEMS')
             return False
-        return jobOutput.decode("utf-8")
+        print("".join(stderr.readlines()))
+        return "".join(stdout.readlines())
 
     #----------------------------------------------------------------------
     def deleteJob(self, ):
@@ -557,7 +587,7 @@ class JobList(GridLayout):
         selectedJobN = self.getSelectedJob()
         if selectedJobN:
             logText = self.getLogFunction()
-            qstatTable = self.qstat
+            qstatTable = self.qstat()
             if selectedJobN in qstatTable and qstatTable[selectedJobN][0] == 'r':
                 command = f'qdel {selectedJobN}'
                 commandOutput = self.sshCommand(command)
@@ -565,7 +595,7 @@ class JobList(GridLayout):
             else:
                 logText(f'Job number {selectedJobN} is already shut down.')
 
-            self.currentConnection[selectedJobN][0].kill()
+            self.currentConnection[selectedJobN][0].close()
             del self.runningJobs[selectedJobN]
             del self.currentConnection[selectedJobN]
 
@@ -579,7 +609,7 @@ class JobList(GridLayout):
         for jobNumber in self.runningJobs:
             i += 1
             if jobNumber in self.currentConnection:
-                self.currentConnection[jobNumber][0].kill()
+                self.currentConnection[jobNumber][0].close()
             self.connectToJob(jobNumber)
         time.sleep(3)
         if i:
@@ -594,14 +624,20 @@ class JobList(GridLayout):
         port = self.runningJobs[jobNumber][0]
         nodeID = self.runningJobs[jobNumber][2]
         projectName = self.runningJobs[jobNumber][3]
-        tunnelCommand = f'ssh -L {port}:{nodeID}:{port} {host}'
+        user_config_file = os.path.expanduser("~/.ssh/config")
         try:
-            tunnel = subprocess.Popen(tunnelCommand, shell = True)
-        except subprocess.CalledProcessError as e:
+            tunnel = SSHTunnelForwarder('hpc',ssh_config_file = user_config_file,
+                                        remote_bind_address = (nodeID, int(port)),
+                                        local_bind_address = ('localhost', int(port)),
+                                        allow_agent = True, ssh_password = '',
+                                        set_keepalive= 10)
+            tunnel.start()
+        except:
             textLog = self.getLogFunction()
-            textLog(f'Could not create tunnel using the command "{tunnelCommand}"')
+            textLog(f'Could not create tunnel')
             return False
         if jobNumber in self.currentConnection:
+            self.currentConnection[jobNumber][0].close()
             del self.currentConnection[jobNumber]
         self.currentConnection[jobNumber] = [tunnel, port, projectName]
 

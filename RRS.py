@@ -1,36 +1,53 @@
+#!/usr/bin/env python
 import os
 import re
 import time
 import json
-import kivy
 import random
 import pickle
-import paramiko
 import threading
 import webbrowser
-import subprocess
-from kivy.app import App
+from datetime import datetime, timedelta
 from functools import partial
+import paramiko
+from kivy.app import App
 from kivy.clock import Clock
 from kivy.uix.label import Label
 from kivy.uix.popup import Popup
 from kivy.uix.button import Button
 from kivy.lang.builder import Builder
 from kivy.uix.boxlayout import BoxLayout
-from datetime import datetime, timedelta
 from sshtunnel import SSHTunnelForwarder
 from kivy.uix.gridlayout import GridLayout
 from kivy.uix.scrollview import ScrollView
-from kivy.properties import DictProperty, ListProperty, StringProperty, ObjectProperty
-
-# for splashscreen: in app return screen manager instead of root WIDGET
-# one screen w/ only image, one with root widget.
-# screens have a self.manager attribute which returns their manager object.
-# make a method that gets called after n seconds of splashscreen and changes the
-# current screen to main widget.
-
+from kivy.uix.screenmanager import ScreenManager, Screen
+from kivy.properties import DictProperty, StringProperty, ObjectProperty
 
 Builder.load_string("""
+#:import FadeTransition kivy.uix.screenmanager.FadeTransition
+
+<SplScreenManager>
+    id: sm
+    transition: FadeTransition()
+    SplashScreen:
+        id: ss
+        name: 'splashscreen'
+        manager: 'sm'
+        BoxLayout:
+            orientation: 'vertical'
+            Image:
+                source: 'RRS_logo.png'
+            Label:
+                id: splashLabel
+                text: 'starting up...'
+                size_hint: 1, 0.1
+    MainScreen:
+        id: ms
+        name: 'mscreen'
+        manager: 'sm'
+        RootWidget:
+            id: rootwid
+
 <ResourcePopup>
     text: 'Resource settings'
     size_hint: [0.4,0.4]
@@ -430,9 +447,7 @@ class JobList(GridLayout):
     #----------------------------------------------------------------------
     def drawButtons(self):
         """"""
-
         for i in self.runningJobs:
-            job = self.runningJobs[i]
             but = Button()
             if i not in self.currentButtons:
                 self.currentButtons[i] = but
@@ -449,7 +464,7 @@ class JobList(GridLayout):
         self.currentButtons = {}
 
     #----------------------------------------------------------------------
-    def on_runningJobs(self, instance, value):
+    def on_runningJobs(self, *args):
         """"""
         self.removeButtons()
         self.drawButtons()
@@ -576,9 +591,9 @@ class JobList(GridLayout):
         return qstatTable
 
     #----------------------------------------------------------------------
-    def updateRunningJobs(self, name, port, time, nodeID, jobNumber):
+    def updateRunningJobs(self, name, port, timeReq, nodeID, jobNumber):
         """"""
-        stopTime = datetime.now() + timedelta(hours= int(time))
+        stopTime = datetime.now() + timedelta(hours= int(timeReq))
         self.runningJobs.update({jobNumber: [port, stopTime, nodeID, name],})
 
     #----------------------------------------------------------------------
@@ -648,7 +663,7 @@ class JobList(GridLayout):
         projectName = self.runningJobs[jobNumber][3]
         user_config_file = os.path.expanduser("~/.ssh/config")
         try:
-            tunnel = SSHTunnelForwarder('hpc',ssh_config_file = user_config_file,
+            tunnel = SSHTunnelForwarder(host,ssh_config_file = user_config_file,
                                         remote_bind_address = (nodeID, int(port)),
                                         local_bind_address = ('localhost', int(port)),
                                         allow_agent = True, ssh_password = '',
@@ -667,7 +682,6 @@ class JobList(GridLayout):
     def on_currentConnection(self, instance, value):
         """"""
         if value:
-            logText = self.getLogFunction()
             tempText = ''
             for jobNumber in value:
                 connection = value[jobNumber]
@@ -689,13 +703,28 @@ class JobList(GridLayout):
 class RootWidget(BoxLayout):
     """"""
     logOutputLabel = ObjectProperty(None)
+
+
+class SplashScreen(Screen):
+    def skip(self, *args):
+        self.parent.current = "mscreen"
+
+
+class MainScreen(Screen):
+    #----------------------------------------------------------------------
+    def initializeWidget(self, *args):
+        """"""
+        self.add_widget(RootWidget())
+
+class SplScreenManager(ScreenManager):
+    """"""
+
     #----------------------------------------------------------------------
     def __init__(self, **kwargs):
         """Constructor"""
-        #initialize base window and set orientation
-        super(RootWidget, self).__init__(**kwargs)
-
-
+        super(SplScreenManager, self).__init__(**kwargs)
+        self.current = 'splashscreen'
+        Clock.schedule_once(self.screens[0].skip, 10)
 
 
 #########################################################################
@@ -707,13 +736,14 @@ class GuiApp(App):
         """Constructor"""
         self.icon = 'RRS_logo.png'
         self.title = 'Rstudio Reproducibility Suite V0.1'
-        return RootWidget()
+
+        return SplScreenManager()
 
     #----------------------------------------------------------------------
     def on_stop(self):
         """"""
         currentApp = App.get_running_app()
-        connections = currentApp.root.ids['joblist'].currentConnection
+        connections = currentApp.root.ids['rootwid'].ids['joblist'].currentConnection
 
         for connection in connections:
             connections[connection][0].close()

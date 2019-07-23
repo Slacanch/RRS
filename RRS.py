@@ -1,15 +1,15 @@
+#!/usr/bin/env python
 import os
 import re
 import time
 import json
-import kivy
 import random
 import pickle
 import threading
 import webbrowser
-import subprocess
-from functools import partial
 from datetime import datetime, timedelta
+from functools import partial
+import paramiko
 from kivy.app import App
 from kivy.clock import Clock
 from kivy.uix.label import Label
@@ -17,11 +17,37 @@ from kivy.uix.popup import Popup
 from kivy.uix.button import Button
 from kivy.lang.builder import Builder
 from kivy.uix.boxlayout import BoxLayout
+from sshtunnel import SSHTunnelForwarder
 from kivy.uix.gridlayout import GridLayout
 from kivy.uix.scrollview import ScrollView
-from kivy.properties import DictProperty,  ListProperty, StringProperty, ObjectProperty
+from kivy.uix.screenmanager import ScreenManager, Screen
+from kivy.properties import DictProperty, StringProperty, ObjectProperty
 
 Builder.load_string("""
+#:import FadeTransition kivy.uix.screenmanager.FadeTransition
+
+<SplScreenManager>
+    id: sm
+    transition: FadeTransition()
+    SplashScreen:
+        id: ss
+        name: 'splashscreen'
+        manager: 'sm'
+        BoxLayout:
+            orientation: 'vertical'
+            Image:
+                source: 'RRS_logo.png'
+            Label:
+                id: splashLabel
+                text: 'starting up...'
+                size_hint: 1, 0.1
+    MainScreen:
+        id: ms
+        name: 'mscreen'
+        manager: 'sm'
+        RootWidget:
+            id: rootwid
+
 <ResourcePopup>
     text: 'Resource settings'
     size_hint: [0.4,0.4]
@@ -216,15 +242,21 @@ class ConfigPopup(Popup):
         newConfigDict = {'host': self.host.text,
                          'projectPath': self.projectPath.text,
                          'imgName': self.imgName.text,}
-        if newConfigDict['host'] and not self.joblist.checkHPCConnection(newConfigDict['host']):
-            textLog = self.joblist.getLogFunction()
-            newHost = newConfigDict['host']
-            textLog(f'the SSH host you tried to set ({newHost}) does not appear to connect correctly '
+        if newConfigDict['host']:
+            tempHost = self.joblist.ssh
+            self.joblist.ssh = self.joblist.sshObjectInit(newConfigDict['host'])
+            if not self.joblist.ssh or not self.joblist.checkHPCConnection():
+                textLog = self.joblist.getLogFunction()
+                newHost = newConfigDict['host']
+                textLog(f'the SSH host you tried to set ({newHost}) does not appear to connect correctly '
                     f'Is the host name spelled correctly? does the host allow passwordless connection? '
-                    f'(test with ssh <hostname> to check if passwordless login is possible) ')
-            self.host.text = ''
-            self.dismiss()
-            return True
+                    f'(test with ssh <hostname> to check if passwordless login is possible). '
+                    f'reverting to the previosus ssh host now.')
+                self.joblist.ssh = tempHost
+                self.host.text = ''
+                self.dismiss()
+                return True
+
 
         for i in currConfigDict:
             if newConfigDict[i]:
@@ -233,6 +265,8 @@ class ConfigPopup(Popup):
 
         self.joblist.configDict = currConfigDict
         self.joblist.saveConfig()
+        if not self.joblist.startupped:
+            self.joblist.startThread(self.joblist.startup)
         self.dismiss()
 
 class LogOutput(Label):
@@ -274,25 +308,63 @@ class JobList(GridLayout):
         """Constructor"""
         super(JobList, self).__init__(**kwargs)
         self.selectedJob = ''
+        self.startupped = 0
         self.resPop = ResourcePopup(self)
         self.confOpen = ConfigPopup(self, self.configDict)
+        self.ssh = self.sshObjectInit()
         self.startThread(self.startup)
 
+    #----------------------------------------------------------------------
+    def sshObjectInit(self, host = None):
+        """"""
+        if not host:
+            host = self.configDict['host']
+
+        try:
+            ssh_config = paramiko.SSHConfig()
+            user_config_file = os.path.expanduser("~/.ssh/config")
+            if os.path.exists(user_config_file):
+                with open(user_config_file) as f:
+                    ssh_config.parse(f)
+
+            hpcConfig = ssh_config.lookup(host)
+            if 'proxycommand' in hpcConfig:
+                proxy = paramiko.ProxyCommand(hpcConfig['proxycommand'])
+
+
+            client = paramiko.SSHClient()
+            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            client.load_system_host_keys()
+
+            client.connect(hpcConfig['hostname'], username= hpcConfig['user'], sock=proxy)
+            client.get_transport().set_keepalive(15)
+
+            return client
+        except:
+            return None
 
     #----------------------------------------------------------------------
     def startup(self, ):
         """"""
         time.sleep(0.5)
         logText = self.getLogFunction()
-        logText('checking connection and loading running jobs if present...')
+
 
         userHomePath = os.path.expanduser("~/")
         if os.path.isfile(userHomePath + '.jobs.pkl'):
             loadedRunningJobs = pickle.load(open(userHomePath + '.jobs.pkl', 'rb'))
-            if self.checkHPCConnection():
+            logText('startup commencing.')
+            if self.ssh and self.checkHPCConnection():
+                logText('checking connection and loading running jobs if present...')
                 self.runningJobs =  self.checkJobs(loadedRunningJobs)
-                logText('Done!')
+                if self.runningJobs:
+                    logText('Done!')
+                else:
+                    logText('No jobs found.')
+                self.startupped = 1
+                logText('startup completed.')
             else:
+                logText('startup failed.')
                 self.runningJobs = {}
                 self.nonFunctionalSSH()
             if self.runningJobs:
@@ -309,10 +381,12 @@ class JobList(GridLayout):
                 f'Is the host name spelled correctly? does the host allow passwordless connection? '
                 f'(test with ssh <hostname> to check if passwordless login is possible) '
                 f'You can change the default SSH host using the settings button.')
+        if not self.startupped:
+            textLog(f'startup will be performed when hpc connection is properly configured.')
     #----------------------------------------------------------------------
-    def checkHPCConnection(self, host = ''):
+    def checkHPCConnection(self):
         """"""
-        check = self.sshCommand('echo gooby', host)
+        check = self.sshCommand('echo gooby')
         return check
 
     #----------------------------------------------------------------------
@@ -351,7 +425,7 @@ class JobList(GridLayout):
                 textLog = self.getLogFunction()
                 textLog(f'{project} job with number {i} has expired and will be closed.')
                 if self.currentConnection[i]:
-                    self.currentConnection[i][0].kill()
+                    self.currentConnection[i][0].close()
                 del self.runningJobs[i]
                 del self.currentConnection[i]
         return True
@@ -373,9 +447,7 @@ class JobList(GridLayout):
     #----------------------------------------------------------------------
     def drawButtons(self):
         """"""
-
         for i in self.runningJobs:
-            job = self.runningJobs[i]
             but = Button()
             if i not in self.currentButtons:
                 self.currentButtons[i] = but
@@ -392,7 +464,7 @@ class JobList(GridLayout):
         self.currentButtons = {}
 
     #----------------------------------------------------------------------
-    def on_runningJobs(self, instance, value):
+    def on_runningJobs(self, *args):
         """"""
         self.removeButtons()
         self.drawButtons()
@@ -519,9 +591,9 @@ class JobList(GridLayout):
         return qstatTable
 
     #----------------------------------------------------------------------
-    def updateRunningJobs(self, name, port, time, nodeID, jobNumber):
+    def updateRunningJobs(self, name, port, timeReq, nodeID, jobNumber):
         """"""
-        stopTime = datetime.now() + timedelta(hours= int(time))
+        stopTime = datetime.now() + timedelta(hours= int(timeReq))
         self.runningJobs.update({jobNumber: [port, stopTime, nodeID, name],})
 
     #----------------------------------------------------------------------
@@ -535,21 +607,17 @@ class JobList(GridLayout):
             return 0
 
     #----------------------------------------------------------------------
-    def sshCommand(self, command, host = ''):
+    def sshCommand(self, command, ssh = None):
         """"""
-        if not host:
-            host = self.configDict['host']
-        sshCommand = f"ssh {host} '{command}'"
+        if not ssh:
+            ssh = self.ssh
         try:
-            jobOutput = subprocess.check_output(sshCommand, shell = True)
-        except subprocess.CalledProcessError as e:
-            try:
-                logText = self.getLogFunction()
-                logText(f'Exit code {e.returncode} when executing {e.cmd}')
-            except AttributeError:
-                return False
+            (stdin, stdout, stderr) = ssh.exec_command(command)
+        except :
+            print('SSH PROBLEMS')
             return False
-        return jobOutput.decode("utf-8")
+        print("".join(stderr.readlines()))
+        return "".join(stdout.readlines())
 
     #----------------------------------------------------------------------
     def deleteJob(self, ):
@@ -557,7 +625,7 @@ class JobList(GridLayout):
         selectedJobN = self.getSelectedJob()
         if selectedJobN:
             logText = self.getLogFunction()
-            qstatTable = self.qstat
+            qstatTable = self.qstat()
             if selectedJobN in qstatTable and qstatTable[selectedJobN][0] == 'r':
                 command = f'qdel {selectedJobN}'
                 commandOutput = self.sshCommand(command)
@@ -565,7 +633,7 @@ class JobList(GridLayout):
             else:
                 logText(f'Job number {selectedJobN} is already shut down.')
 
-            self.currentConnection[selectedJobN][0].kill()
+            self.currentConnection[selectedJobN][0].close()
             del self.runningJobs[selectedJobN]
             del self.currentConnection[selectedJobN]
 
@@ -579,9 +647,8 @@ class JobList(GridLayout):
         for jobNumber in self.runningJobs:
             i += 1
             if jobNumber in self.currentConnection:
-                self.currentConnection[jobNumber][0].kill()
+                self.currentConnection[jobNumber][0].close()
             self.connectToJob(jobNumber)
-        time.sleep(3)
         if i:
             logText('...Reconnected.')
         else:
@@ -594,14 +661,20 @@ class JobList(GridLayout):
         port = self.runningJobs[jobNumber][0]
         nodeID = self.runningJobs[jobNumber][2]
         projectName = self.runningJobs[jobNumber][3]
-        tunnelCommand = f'ssh -L {port}:{nodeID}:{port} {host}'
+        user_config_file = os.path.expanduser("~/.ssh/config")
         try:
-            tunnel = subprocess.Popen(tunnelCommand, shell = True)
-        except subprocess.CalledProcessError as e:
+            tunnel = SSHTunnelForwarder(host,ssh_config_file = user_config_file,
+                                        remote_bind_address = (nodeID, int(port)),
+                                        local_bind_address = ('localhost', int(port)),
+                                        allow_agent = True, ssh_password = '',
+                                        set_keepalive= 10)
+            tunnel.start()
+        except:
             textLog = self.getLogFunction()
-            textLog(f'Could not create tunnel using the command "{tunnelCommand}"')
+            textLog(f'Could not create tunnel')
             return False
         if jobNumber in self.currentConnection:
+            self.currentConnection[jobNumber][0].close()
             del self.currentConnection[jobNumber]
         self.currentConnection[jobNumber] = [tunnel, port, projectName]
 
@@ -609,8 +682,6 @@ class JobList(GridLayout):
     def on_currentConnection(self, instance, value):
         """"""
         if value:
-            logText = self.getLogFunction()
-            time.sleep(3)
             tempText = ''
             for jobNumber in value:
                 connection = value[jobNumber]
@@ -632,13 +703,28 @@ class JobList(GridLayout):
 class RootWidget(BoxLayout):
     """"""
     logOutputLabel = ObjectProperty(None)
+
+
+class SplashScreen(Screen):
+    def skip(self, *args):
+        self.parent.current = "mscreen"
+
+
+class MainScreen(Screen):
+    #----------------------------------------------------------------------
+    def initializeWidget(self, *args):
+        """"""
+        self.add_widget(RootWidget())
+
+class SplScreenManager(ScreenManager):
+    """"""
+
     #----------------------------------------------------------------------
     def __init__(self, **kwargs):
         """Constructor"""
-        #initialize base window and set orientation
-        super(RootWidget, self).__init__(**kwargs)
-
-
+        super(SplScreenManager, self).__init__(**kwargs)
+        self.current = 'splashscreen'
+        Clock.schedule_once(self.screens[0].skip, 10)
 
 
 #########################################################################
@@ -650,9 +736,17 @@ class GuiApp(App):
         """Constructor"""
         self.icon = 'RRS_logo.png'
         self.title = 'Rstudio Reproducibility Suite V0.1'
-        return RootWidget()
 
+        return SplScreenManager()
 
+    #----------------------------------------------------------------------
+    def on_stop(self):
+        """"""
+        currentApp = App.get_running_app()
+        connections = currentApp.root.ids['rootwid'].ids['joblist'].currentConnection
+
+        for connection in connections:
+            connections[connection][0].close()
 
 if __name__ == '__main__':
 

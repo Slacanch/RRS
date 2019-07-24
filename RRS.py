@@ -87,35 +87,48 @@ Builder.load_string("""
 
 <ConfigPopup>
     text: 'Settings'
-    size_hint: [0.6,0.4]
+    size_hint: [0.6,0.6]
     auto_dismiss: False
     projectPath: projectPathText
     host: hostText
     imgName: imgNameText
     pos_hint: {'center_x':0.5, 'center_y':0.5}
-    GridLayout:
-        cols: 2
-        Label:
-            text: "Path to project folders"
-        TextInput:
-            id: projectPathText
-            hint_text: root.currProjectPath
-        Label:
-            text: "Name of the hpc host"
-        TextInput:
-            id: hostText
-            hint_text: root.currHost
-        Label:
-            text: "Singularity image name"
-        TextInput:
-            id: imgNameText
-            hint_text: root.currImgName
+    BoxLayout:
+        orientation: 'vertical'
         Button:
-            text: 'confirm'
-            on_press: root.closeAndStart()
+            size_hint: 1, 0.25
+            id: help
+            text: 'Open RRS help page'
+            on_press: root.openHelp()
         Button:
-            text: 'cancel'
-            on_press: root.dismiss()
+            size_hint: 1, 0.25
+            id: hpcReconnect
+            text: 'Re-establish ssh connection with the hpc'
+            on_press: root.hpcReconnect()
+        GridLayout:
+            cols: 2
+            Label:
+                text: "Path to project folders"
+            TextInput:
+                id: projectPathText
+                hint_text: root.currProjectPath
+            Label:
+                text: "Name of the hpc host"
+            TextInput:
+                id: hostText
+                hint_text: root.currHost
+            Label:
+                text: "Singularity image name"
+            TextInput:
+                id: imgNameText
+                hint_text: root.currImgName
+            Button:
+                text: 'confirm'
+                on_press: root.closeAndStart()
+            Button:
+                text: 'cancel'
+                on_press: root.dismiss()
+
 <RootWidget>
     id: rootwid
     logOutputLabel: logOutputLabel
@@ -269,6 +282,17 @@ class ConfigPopup(Popup):
             self.joblist.startThread(self.joblist.startup)
         self.dismiss()
 
+    #----------------------------------------------------------------------
+    def openHelp(self):
+        """"""
+        url = f'https://wiki.bioinf.prinsesmaximacentrum.nl/Singlecellgenomics/WebHome'
+        webbrowser.open_new_tab(url)
+
+    #----------------------------------------------------------------------
+    def hpcReconnect(self):
+        """"""
+        self.joblist.ssh = self.joblist.sshCheckAlive(force = True)
+
 class LogOutput(Label):
     """"""
 
@@ -309,66 +333,124 @@ class JobList(GridLayout):
         super(JobList, self).__init__(**kwargs)
         self.selectedJob = ''
         self.startupped = 0
+        self.sshAlive = False
         self.resPop = ResourcePopup(self)
         self.confOpen = ConfigPopup(self, self.configDict)
-        self.ssh = self.sshObjectInit()
+
         self.startThread(self.startup)
+
+    #----------------------------------------------------------------------
+    def sshCheckAlive(self, *args, force = False, ):
+        """"""
+
+
+        if self.sshAlive or force:
+            try:
+                alive = self.ssh.get_transport().isAlive()
+            except:
+                alive = False
+
+            if not alive:
+                logText = self.getLogFunction()
+                logText("the SSH connection seems to have failed. "
+                        "Attempting to reconnect to the hpc now...")
+                self.sshAlive = False
+                self.ssh = self.sshObjectInit()
+                if self.ssh:
+                    try:
+                        alive = self.ssh.get_transport().isAlive()
+                    except:
+                        alive = False
+                    if not alive:
+                        logText("Unable to reconnect, is your internet connection "
+                                "working? you can re-establish connection with the "
+                                "hpc in the settings.")
+                        self.sshAlive = False
+                    else:
+                        self.sshAlive = True
+                        logText('Connection reestablished.')
+                else:
+                    logText("Unable to reconnect, is your internet connection "
+                            "working? you can re-establish connection with the "
+                            "hpc in the settings.")
+                    self.sshAlive = False
+
 
     #----------------------------------------------------------------------
     def sshObjectInit(self, host = None):
         """"""
+        logText = self.getLogFunction()
         if not host:
             host = self.configDict['host']
 
+
+        ssh_config = paramiko.SSHConfig()
+        user_config_file = os.path.expanduser("~/.ssh/config")
+
         try:
-            ssh_config = paramiko.SSHConfig()
-            user_config_file = os.path.expanduser("~/.ssh/config")
-            if os.path.exists(user_config_file):
-                with open(user_config_file) as f:
-                    ssh_config.parse(f)
+            with open(user_config_file) as f:
+                ssh_config.parse(f)
+        except:
+            logText("Could not parse ~/.ssh/config, does the file exist?")
+            return None
 
+        try:
             hpcConfig = ssh_config.lookup(host)
-            if 'proxycommand' in hpcConfig:
-                proxy = paramiko.ProxyCommand(hpcConfig['proxycommand'])
+            proxy = paramiko.ProxyCommand(hpcConfig['proxycommand'])
+            assert hpcConfig['hostname']
+            assert hpcConfig['user']
+        except:
+            logText("host configuration seems to be incorrect. the host must be "
+                    "configured to have a hostname, username and proxy command.")
+            return None
 
-
+        try:
             client = paramiko.SSHClient()
             client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
             client.load_system_host_keys()
 
             client.connect(hpcConfig['hostname'], username= hpcConfig['user'], sock=proxy)
             client.get_transport().set_keepalive(15)
+            self.sshAlive = True
 
             return client
         except:
+            logText("failed to connect to the hpc, internet not working?")
             return None
 
     #----------------------------------------------------------------------
     def startup(self, ):
         """"""
         time.sleep(0.5)
-        logText = self.getLogFunction()
+        self.logText = self.getLogFunction()
 
+        self.ssh = self.sshObjectInit()
 
         userHomePath = os.path.expanduser("~/")
         if os.path.isfile(userHomePath + '.jobs.pkl'):
             loadedRunningJobs = pickle.load(open(userHomePath + '.jobs.pkl', 'rb'))
-            logText('startup commencing.')
-            if self.ssh and self.checkHPCConnection():
-                logText('checking connection and loading running jobs if present...')
-                self.runningJobs =  self.checkJobs(loadedRunningJobs)
-                if self.runningJobs:
-                    logText('Done!')
-                else:
-                    logText('No jobs found.')
-                self.startupped = 1
-                logText('startup completed.')
-            else:
-                logText('startup failed.')
-                self.runningJobs = {}
-                self.nonFunctionalSSH()
+        else:
+            loadedRunningJobs = {}
+
+        self.logText('startup commencing.')
+        if self.ssh and self.checkHPCConnection():
+            self.logText('checking connection and loading running jobs if present...')
+            self.runningJobs =  self.checkJobs(loadedRunningJobs)
             if self.runningJobs:
-                self.reconnectAll()
+                self.logText('Done!')
+            else:
+                self.logText('No jobs found.')
+            self.sshAlive = True
+            self.startupped = True
+            Clock.schedule_interval(self.sshCheckAlive, 20)
+            self.logText('startup completed.')
+        else:
+            self.logText('startup failed.')
+            self.runningJobs = {}
+            if self.ssh:
+                self.nonFunctionalSSH()
+        if self.runningJobs:
+            self.reconnectAll()
 
 
 
@@ -499,71 +581,74 @@ class JobList(GridLayout):
     #----------------------------------------------------------------------
     def submitJob(self, project, cpus, memory, duration):
         """"""
-        logText = self.getLogFunction()
-        projectPath = self.configDict['projectPath']
-        imgName = self.configDict['imgName']
-        cookiesPath = f'{projectPath}{project}/cookies'
-        homePath = f'{projectPath}{project}'
-        imagePath = f'{projectPath}{imgName}'
+        if self.sshAlive:
+            logText = self.getLogFunction()
+            projectPath = self.configDict['projectPath']
+            imgName = self.configDict['imgName']
+            cookiesPath = f'{projectPath}{project}/cookies'
+            homePath = f'{projectPath}{project}'
+            imagePath = f'{projectPath}{imgName}'
 
-        if not (self.checkFolders(cookiesPath)):
-            logText(f'folder {homePath} or {cookiesPath} does not exist, '
-                    f'make sure to create them!')
-            return False
-
-        if not duration:
-            duration = '1'
-        duration = f'{duration}::'
-        if not memory:
-            memory = 8
-        vmem = f"{memory}G"
-        port = str(random.randint(8787, 10000))
-        if not cpus:
-            cpus = 1
-        cps = f'-pe threaded {cpus} '
-        qsub = 'qsub -b yes -cwd -V -q all.q -N singInstance '
-        qrunCommand = f"{qsub} -l h_rt={duration} -l h_vmem={vmem} {cps}"
-        rserverOptions = f"--www-port={port} --auth-minimum-user-id=100 --server-set-umask=0"
-        exCommand = (f'{qrunCommand} "singularity exec '
-                     f'-B {cookiesPath}:/tmp '
-                     f'-H {homePath} '
-                     f'{imagePath} '
-                     f'rserver {rserverOptions} "')
-
-
-
-        logText('submitting: ' + exCommand + "\n")# self.startThread(logText, 'submitting: ' + sshCommand)  #
-        jobOutput = self.sshCommand(exCommand)
-        logText(jobOutput)
-
-        jobNumberPattern = re.compile("Your job (\d+) ")
-        jobNumber = jobNumberPattern.search(jobOutput).group(1)
-
-        logText(f'Job number is {jobNumber}, waiting for job to run...\n')
-
-        nodeID = ''
-        while True:
-            if nodeID != '':
-                logText(f'job running on node {nodeID}!\n')
-                break
-            else:
-                time.sleep(10)
-                logText(f'job is still in queue...\n')
-
-            qstatTable = self.qstat()
-
-            if jobNumber not in qstatTable:
-                logText('the submitted job is no longer in the queue, '
-                        'maybe it executed and shut down due to an error?')
+            if not (self.checkFolders(cookiesPath)):
+                logText(f'folder {homePath} or {cookiesPath} does not exist, '
+                        f'make sure to create them!')
                 return False
-            elif qstatTable[jobNumber][0] == 'r':
-                nodeID = qstatTable[jobNumber][1]
 
-        self.updateRunningJobs(project, port, duration[0], nodeID, jobNumber)
-        userHomePath = os.path.expanduser("~/")
-        pickle.dump(dict(self.runningJobs), open(userHomePath + '.jobs.pkl', 'wb') )
+            if not duration:
+                duration = '1'
+            duration = f'{duration}::'
+            if not memory:
+                memory = 8
+            vmem = f"{memory}G"
+            port = str(random.randint(8787, 10000))
+            if not cpus:
+                cpus = 1
+            cps = f'-pe threaded {cpus} '
+            qsub = 'qsub -b yes -cwd -V -q all.q -N singInstance '
+            qrunCommand = f"{qsub} -l h_rt={duration} -l h_vmem={vmem} {cps}"
+            rserverOptions = f"--www-port={port} --auth-minimum-user-id=100 --server-set-umask=0"
+            exCommand = (f'{qrunCommand} "singularity exec '
+                         f'-B {cookiesPath}:/tmp '
+                         f'-H {homePath} '
+                         f'{imagePath} '
+                         f'rserver {rserverOptions} "')
 
-        self.startThread(self.connectToJob(jobNumber))
+
+
+            logText('submitting: ' + exCommand + "\n")# self.startThread(logText, 'submitting: ' + sshCommand)  #
+            jobOutput = self.sshCommand(exCommand)
+            logText(jobOutput)
+
+            jobNumberPattern = re.compile("Your job (\d+) ")
+            jobNumber = jobNumberPattern.search(jobOutput).group(1)
+
+            logText(f'Job number is {jobNumber}, waiting for job to run...\n')
+
+            nodeID = ''
+            while True:
+                if nodeID != '':
+                    logText(f'job running on node {nodeID}!\n')
+                    break
+                else:
+                    time.sleep(10)
+                    logText(f'job is still in queue...\n')
+
+                qstatTable = self.qstat()
+
+                if jobNumber not in qstatTable:
+                    logText('the submitted job is no longer in the queue, '
+                            'maybe it executed and shut down due to an error?')
+                    return False
+                elif qstatTable[jobNumber][0] == 'r':
+                    nodeID = qstatTable[jobNumber][1]
+
+            self.updateRunningJobs(project, port, duration[0], nodeID, jobNumber)
+            userHomePath = os.path.expanduser("~/")
+            pickle.dump(dict(self.runningJobs), open(userHomePath + '.jobs.pkl', 'wb') )
+
+            self.startThread(self.connectToJob(jobNumber))
+        else:
+            self.logText("no hpc connection, cannot start new job.")
 
     #----------------------------------------------------------------------
     def qstat(self):
@@ -622,38 +707,42 @@ class JobList(GridLayout):
     #----------------------------------------------------------------------
     def deleteJob(self, ):
         """"""
-        selectedJobN = self.getSelectedJob()
-        if selectedJobN:
-            logText = self.getLogFunction()
-            qstatTable = self.qstat()
-            if selectedJobN in qstatTable and qstatTable[selectedJobN][0] == 'r':
-                command = f'qdel {selectedJobN}'
-                commandOutput = self.sshCommand(command)
-                logText(commandOutput)
-            else:
-                logText(f'Job number {selectedJobN} is already shut down.')
+        if self.sshAlive:
+            selectedJobN = self.getSelectedJob()
+            if selectedJobN:
+                logText = self.getLogFunction()
+                qstatTable = self.qstat()
+                if selectedJobN in qstatTable and qstatTable[selectedJobN][0] == 'r':
+                    command = f'qdel {selectedJobN}'
+                    commandOutput = self.sshCommand(command)
+                    logText(commandOutput)
+                else:
+                    logText(f'Job number {selectedJobN} is already shut down.')
 
-            self.currentConnection[selectedJobN][0].close()
-            del self.runningJobs[selectedJobN]
-            del self.currentConnection[selectedJobN]
-
+                self.currentConnection[selectedJobN][0].close()
+                del self.runningJobs[selectedJobN]
+                del self.currentConnection[selectedJobN]
+        else:
+            self.logText('no hpc connection, cannot delete job')
     #----------------------------------------------------------------------
     def reconnectAll(self, *args):
         """"""
-        logText = self.getLogFunction()
-        logText('Reconnecting to all jobs...')
-        i = 0
+        if self.sshAlive:
+            logText = self.getLogFunction()
+            logText('Reconnecting to all jobs...')
+            i = 0
 
-        for jobNumber in self.runningJobs:
-            i += 1
-            if jobNumber in self.currentConnection:
-                self.currentConnection[jobNumber][0].close()
-            self.connectToJob(jobNumber)
-        if i:
-            logText('...Reconnected.')
+            for jobNumber in self.runningJobs:
+                i += 1
+                if jobNumber in self.currentConnection:
+                    self.currentConnection[jobNumber][0].close()
+                self.connectToJob(jobNumber)
+            if i:
+                logText('...Reconnected.')
+            else:
+                logText('...Nothing to reconnect to.')
         else:
-            logText('...Nothing to reconnect to.')
-
+            self.logText("no hpc connection, cannot reconnect.")
     #----------------------------------------------------------------------
     def connectToJob(self, jobNumber):
         """"""
@@ -749,8 +838,4 @@ class GuiApp(App):
             connections[connection][0].close()
 
 if __name__ == '__main__':
-
-
     GuiApp().run()
-
-

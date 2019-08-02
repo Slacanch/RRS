@@ -1,0 +1,160 @@
+#:import FadeTransition kivy.uix.screenmanager.FadeTransition
+
+<SplScreenManager>
+    id: sm
+    transition: FadeTransition()
+    SplashScreen:
+        id: ss
+        name: 'splashscreen'
+        manager: 'sm'
+        BoxLayout:
+            orientation: 'vertical'
+            Image:
+                source: 'RRS_logo.png'
+            Label:
+                id: splashLabel
+                text: 'starting up...'
+                size_hint: 1, 0.1
+    MainScreen:
+        id: ms
+        name: 'mscreen'
+        manager: 'sm'
+        RootWidget:
+            id: rootwid
+
+<ResourcePopup>
+    text: 'Resource settings'
+    size_hint: [0.4,0.4]
+    auto_dismiss: False
+    project: projectText
+    cpus: cpuText
+    memory: memText
+    duration: timeText
+    pos_hint: {'center_x':0.5, 'center_y':0.5}
+    GridLayout:
+        cols: 2
+        Label:
+            text: "Project"
+        TextInput:
+            id: projectText
+        Label:
+            text: "Cpus (number)"
+        TextInput:
+            id: cpuText
+            hint_text: "1"
+        Label:
+            text: "Memory (GB)"
+        TextInput:
+            id: memText
+            hint_text: "8"
+        Label:
+            text: 'Time (hours)'
+        TextInput:
+            id: timeText
+            hint_text: "1"
+        Button:
+            text: 'confirm'
+            on_press: root.closeAndStart()
+        Button:
+            text: 'cancel'
+            on_press: root.dismiss()
+
+<ConfigPopup>
+    text: 'Settings'
+    size_hint: [0.6,0.6]
+    auto_dismiss: False
+    projectPath: projectPathText
+    host: hostText
+    imgName: imgNameText
+    pos_hint: {'center_x':0.5, 'center_y':0.5}
+    BoxLayout:
+        orientation: 'vertical'
+        Button:
+            size_hint: 1, 0.25
+            id: help
+            text: 'Open RRS help page'
+            on_press: root.openHelp()
+        Button:
+            size_hint: 1, 0.25
+            id: hpcReconnect
+            text: 'Re-establish ssh connection with the hpc'
+            on_press: root.hpcReconnect()
+        GridLayout:
+            cols: 2
+            Label:
+                text: "Path to project folders"
+            TextInput:
+                id: projectPathText
+                hint_text: root.currProjectPath
+            Label:
+                text: "Name of the hpc host"
+            TextInput:
+                id: hostText
+                hint_text: root.currHost
+            Label:
+                text: "Singularity image name"
+            TextInput:
+                id: imgNameText
+                hint_text: root.currImgName
+            Button:
+                text: 'confirm'
+                on_press: root.closeAndStart()
+            Button:
+                text: 'cancel'
+                on_press: root.dismiss()
+
+<RootWidget>
+    id: rootwid
+    logOutputLabel: logOutputLabel
+    BoxLayout:
+        id: box
+        orientation: 'vertical'
+        Label:
+            id: connectionText
+            size_hint: 1, 0.4
+            text: "YOU ARE NOT CONNECTED"
+        GridLayout:
+            cols: 5
+            size_hint: 1, 0.3
+            Button:
+                id: browser
+                text: 'Open in browser'
+                on_press: joblist.startThread(joblist.openBrowser)
+            Button:
+                id: connect
+                text: 'Reconnect to jobs'
+                on_press: joblist.startThread(joblist.reconnectAll)
+            Button:
+                id: new_job
+                text: 'new job'
+                on_press:
+                    joblist.resPop.open()
+            Button:
+                id: kill_job
+                text: 'kill job'
+                on_press: joblist.startThread(joblist.deleteJob)
+            Button:
+                id: config
+                size_hint: 0.3, 0.3
+                text: 'settings'
+                on_press: joblist.confOpen.open()
+        Label:
+            size_hint: 1, 0.1
+            text: 'Running Jobs'
+        JobList:
+            id: joblist
+            logOutput: root.logOutputLabel
+            cols: 1
+            size_hint: 1, 0.5
+        Label:
+            size_hint: 1, 0.1
+            text: 'Log Output'
+        ScrollView:
+            LogOutput:
+                id: logOutputLabel
+                text: ''
+                font_size: 30
+                text_size: self.width, None
+                size_hint_y: None
+                height: self.texture_size[1]
+                multiline: True

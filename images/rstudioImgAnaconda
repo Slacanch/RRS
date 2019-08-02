@@ -1,0 +1,102 @@
+BootStrap: docker
+From: ubuntu:16.04
+
+%labels
+  Maintainer Tito Candelli
+  R_Version 3.6.0 
+  RStudio_Version 1.2.1335
+
+%help
+  This will run RStudio Server
+
+ %apprun rserver
+  exec rserver "${@}"
+
+%runscript
+  exec rserver "${@}"
+
+%environment
+  export PATH=/usr/lib/rstudio-server/bin:${PATH}
+  export PATH=/opt/anaconda3/bin:${PATH}
+  export PYTHONPATH=/opt/anaconda3/bin/  
+  export LD_LIBRARY_PATH=/opt/anaconda3/lib/:/usr/lib/x86_64-linux-gnu/:/lib/x86_64-linux-gnu/${LD_LIBRARY_PATH}
+
+%post
+  #### R ####
+
+  # Software versions
+  export R_VERSION=3.6.0
+
+  # Get dependencies
+  apt-get update
+  apt-get install -y --no-install-recommends \
+    locales
+  apt-get -y install libssl-dev  
+  apt-get -y install libcurl4-openssl-dev
+  apt-get -y install libxml2-dev
+  apt-get -y install libpng-dev
+
+  # Configure default locale
+  echo "en_US.UTF-8 UTF-8" >> /etc/locale.gen
+  locale-gen en_US.utf8
+  /usr/sbin/update-locale LANG=en_US.UTF-8
+  export LC_ALL=en_US.UTF-8
+  export LANG=en_US.UTF-8
+
+  # Install R
+  echo "deb http://cran.r-project.org/bin/linux/ubuntu xenial-cran35/" > /etc/apt/sources.list.d/r.list
+  apt-key adv --keyserver keyserver.ubuntu.com --recv-keys E084DAB9
+  apt-get update
+  apt-get install -y --allow-unauthenticated --no-install-recommends \
+    r-base=${R_VERSION}* \
+    r-base-core=${R_VERSION}* \
+    r-base-dev=${R_VERSION}* \
+    r-recommended=${R_VERSION}* \
+    r-base-html=${R_VERSION}* \
+    r-doc-html=${R_VERSION}* \
+    libcurl4-openssl-dev \
+    libssl-dev \
+    libxml2-dev \
+    libcairo2-dev \
+    libxt-dev \
+
+  # Add a default CRAN mirror
+  echo "options(repos = c(CRAN = 'https://cran.rstudio.com/'), download.file.method = 'libcurl')" >> /usr/lib/R/etc/Rprofile.site
+
+  # Add a directory for host R libraries
+  mkdir -p /library
+  echo "R_LIBS_SITE=/library:\${R_LIBS_SITE}" >> /usr/lib/R/etc/Renviron.site
+
+
+  #### RSTUDIO ####
+
+  # Software versions
+  export RSTUDIO_VERSION=1.2.1335
+
+  # Install RStudio Server
+  apt-get update
+  apt-get install -y --no-install-recommends \
+    ca-certificates \
+    wget \
+    gdebi-core
+  wget \
+    --no-verbose \
+    -O rstudio-server.deb \
+    "https://download2.rstudio.org/server/trusty/amd64/rstudio-server-${RSTUDIO_VERSION}-amd64.deb"
+  gdebi -n rstudio-server.deb
+  rm -f rstudio-server.deb
+
+  #### ANACONDA PYTHON ####
+
+  wget -O /usr/local/bin/anacondaInstall.sh \
+  "https://repo.anaconda.com/archive/Anaconda3-2019.03-Linux-x86_64.sh"
+  chmod +rwx /usr/local/bin/anacondaInstall.sh
+  anacondaInstall.sh -b -p /opt/anaconda3
+  echo 'PATH=$PATH:/opt/anaconda3/bin' >> /etc/profile
+  export PATH=/opt/anaconda3/bin:$PATH
+  /opt/anaconda3/bin/pip install umap-learn
+
+  # Clean up
+  rm -rf /var/lib/apt/lists/*
+  rm /usr/local/bin/anacondaInstall.sh
+  rm /usr/bin/python

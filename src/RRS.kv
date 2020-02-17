@@ -119,29 +119,29 @@
             Button:
                 id: browser
                 text: 'Open in browser'
-                on_press: joblist.startThread(joblist.openBrowser)
+                on_press: startThread(root.openBrowser)
             Button:
                 id: connect
                 text: 'Reconnect to jobs'
-                on_press: joblist.startThread(joblist.reconnectAll)
+                on_press: startThread(root.reconnectAll)
             Button:
                 id: new_job
                 text: 'new job'
                 on_press:
-                    joblist.resPop.open()
+                    root.resPop.open()
             Button:
                 id: kill_job
                 text: 'kill job'
-                on_press: joblist.startThread(joblist.deleteJob)
+                on_press: startThread(rootv.ssh.deleteJob)
             Button:
                 id: config
                 size_hint: 0.3, 0.3
                 text: 'settings'
-                on_press: joblist.confOpen.open()
+                on_press: root.confOpen.open()
         Label:
             size_hint: 1, 0.1
             text: 'Running Jobs'
-        JobList:
+        BoxLayout:
             id: joblist
             logOutput: root.logOutputLabel
             cols: 1

@@ -7,9 +7,9 @@ import random
 import pickle
 import threading
 import webbrowser
+from types import SimpleNamespace
 from datetime import datetime, timedelta
 from functools import partial
-
 from kivy.app import App
 from kivy.clock import Clock
 from kivy.uix.label import Label
@@ -17,176 +17,43 @@ from kivy.uix.popup import Popup
 from kivy.uix.button import Button
 from kivy.lang.builder import Builder
 from kivy.uix.boxlayout import BoxLayout
-
 from kivy.uix.gridlayout import GridLayout
 from kivy.uix.scrollview import ScrollView
 from kivy.uix.screenmanager import ScreenManager, Screen
 from kivy.properties import DictProperty, StringProperty, ObjectProperty
 
-Builder.load_string("""
-#:import FadeTransition kivy.uix.screenmanager.FadeTransition
+#----------------------------------------------------------------------
+def startThread(self, function, *args):
+    """"""
+    if args:
+        args = tuple(args)
+    threading.Thread(target = function, args = args).start()
 
-<SplScreenManager>
-    id: sm
-    transition: FadeTransition()
-    SplashScreen:
-        id: ss
-        name: 'splashscreen'
-        manager: 'sm'
-        BoxLayout:
-            orientation: 'vertical'
-            Image:
-                source: 'RRS_logo.png'
-            Label:
-                id: splashLabel
-                text: 'starting up...'
-                size_hint: 1, 0.1
-    MainScreen:
-        id: ms
-        name: 'mscreen'
-        manager: 'sm'
-        RootWidget:
-            id: rootwid
+#----------------------------------------------------------------------
+def readConfig():
+    """read config file from home"""
+    configPath = os.path.expanduser("~/.RRS_config")
+    if os.path.isfile(configPath):
+        confDict = json.load(open(configPath))
 
-<ResourcePopup>
-    text: 'Resource settings'
-    size_hint: [0.4,0.4]
-    auto_dismiss: False
-    project: projectText
-    cpus: cpuText
-    memory: memText
-    duration: timeText
-    pos_hint: {'center_x':0.5, 'center_y':0.5}
-    GridLayout:
-        cols: 2
-        Label:
-            text: "Project"
-        TextInput:
-            id: projectText
-        Label:
-            text: "Cpus (number)"
-        TextInput:
-            id: cpuText
-            hint_text: "1"
-        Label:
-            text: "Memory (GB)"
-        TextInput:
-            id: memText
-            hint_text: "8"
-        Label:
-            text: 'Time (hours)'
-        TextInput:
-            id: timeText
-            hint_text: "1"
-        Button:
-            text: 'confirm'
-            on_press: root.closeAndStart()
-        Button:
-            text: 'cancel'
-            on_press: root.dismiss()
+        return confDict
+    else:
+        defaultSSHHost = 'hpc'
+        defaultProjectPath = '/hpc/pmc_gen/rstudio/'
+        defaultImg = 'rstudio.simg'
+        confDict = {'host': defaultSSHHost,
+                    'projectPath': defaultProjectPath,
+                    'imgName': defaultImg,}
 
-<ConfigPopup>
-    text: 'Settings'
-    size_hint: [0.6,0.6]
-    auto_dismiss: False
-    projectPath: projectPathText
-    host: hostText
-    imgName: imgNameText
-    pos_hint: {'center_x':0.5, 'center_y':0.5}
-    BoxLayout:
-        orientation: 'vertical'
-        Button:
-            size_hint: 1, 0.25
-            id: help
-            text: 'Open RRS help page'
-            on_press: root.openHelp()
-        Button:
-            size_hint: 1, 0.25
-            id: hpcReconnect
-            text: 'Re-establish ssh connection with the hpc'
-            on_press: root.hpcReconnect()
-        GridLayout:
-            cols: 2
-            Label:
-                text: "Path to project folders"
-            TextInput:
-                id: projectPathText
-                hint_text: root.currProjectPath
-            Label:
-                text: "Name of the hpc host"
-            TextInput:
-                id: hostText
-                hint_text: root.currHost
-            Label:
-                text: "Singularity image name"
-            TextInput:
-                id: imgNameText
-                hint_text: root.currImgName
-            Button:
-                text: 'confirm'
-                on_press: root.closeAndStart()
-            Button:
-                text: 'cancel'
-                on_press: root.dismiss()
-
-<RootWidget>
-    id: rootwid
-    logOutputLabel: logOutputLabel
-    BoxLayout:
-        id: box
-        orientation: 'vertical'
-        Label:
-            id: connectionText
-            size_hint: 1, 0.4
-            text: "YOU ARE NOT CONNECTED"
-        GridLayout:
-            cols: 5
-            size_hint: 1, 0.3
-            Button:
-                id: browser
-                text: 'Open in browser'
-                on_press: joblist.startThread(joblist.openBrowser)
-            Button:
-                id: connect
-                text: 'Reconnect to jobs'
-                on_press: joblist.startThread(joblist.reconnectAll)
-            Button:
-                id: new_job
-                text: 'new job'
-                on_press:
-                    joblist.resPop.open()
-            Button:
-                id: kill_job
-                text: 'kill job'
-                on_press: joblist.startThread(joblist.deleteJob)
-            Button:
-                id: config
-                size_hint: 0.3, 0.3
-                text: 'settings'
-                on_press: joblist.confOpen.open()
-        Label:
-            size_hint: 1, 0.1
-            text: 'Running Jobs'
-        JobList:
-            id: joblist
-            logOutput: root.logOutputLabel
-            cols: 1
-            size_hint: 1, 0.5
-        Label:
-            size_hint: 1, 0.1
-            text: 'Log Output'
-        ScrollView:
-            LogOutput:
-                id: logOutputLabel
-                text: ''
-                font_size: 30
-                text_size: self.width, None
-                size_hint_y: None
-                height: self.texture_size[1]
-                multiline: True
-""")
+        return confDict
 
 
+
+
+
+
+
+#----------------------------------------------------------------------
 class ResourcePopup(Popup):
     """"""
     project = ObjectProperty(None)
@@ -211,23 +78,7 @@ class ResourcePopup(Popup):
                                  self.duration.text)
         self.dismiss()
 
-#----------------------------------------------------------------------
-def readConfig():
-    """read config file from home"""
-    configPath = os.path.expanduser("~/.RRS_config")
-    if os.path.isfile(configPath):
-        confDict = json.load(open(configPath))
 
-        return confDict
-    else:
-        defaultSSHHost = 'hpc'
-        defaultProjectPath = '/hpc/pmc_gen/rstudio/'
-        defaultImg = 'rstudio.simg'
-        confDict = {'host': defaultSSHHost,
-                    'projectPath': defaultProjectPath,
-                    'imgName': defaultImg,}
-
-        return confDict
 
 class ConfigPopup(Popup):
     """"""
@@ -283,6 +134,15 @@ class ConfigPopup(Popup):
         self.dismiss()
 
     #----------------------------------------------------------------------
+    def saveConfig(self):
+        """"""
+        logText = self.getLogFunction()
+        logText('saving configuration...')
+        configFile = os.path.expanduser("~/.RRS_config")
+        json.dump(self.configDict, open(configFile, 'w'))
+        logText("saved!")
+
+    #----------------------------------------------------------------------
     def openHelp(self):
         """"""
         url = f'https://wiki.bioinf.prinsesmaximacentrum.nl/Singlecellgenomics/WebHome'
@@ -305,21 +165,21 @@ class LogOutput(Label):
         self.text = currentTime + ": " + value + self.text
 
 
-
-class JobList(GridLayout):
+class RootWidget(BoxLayout):
     """"""
+    logOutputLabel = ObjectProperty(None)
+
     runningJobs = DictProperty({}) # {jobnumber: [port, stopTime, nodeID, name]}
     currentButtons = {}
     currentConnection = DictProperty({})
     configDict = readConfig()
-    logOutput = ObjectProperty(None)
+
     #----------------------------------------------------------------------
     def __init__(self, **kwargs):
         """Constructor"""
-        super(JobList, self).__init__(**kwargs)
+        super(RootWidget, self).__init__(**kwargs)
         self.selectedJob = ''
         self.startupped = 0
-        self.sshAlive = False
         self.resPop = ResourcePopup(self)
         self.confOpen = ConfigPopup(self, self.configDict)
 
@@ -362,47 +222,7 @@ class JobList(GridLayout):
                     self.sshAlive = False
 
 
-    #----------------------------------------------------------------------
-    def sshObjectInit(self, host = None):
-        """"""
-        logText = self.getLogFunction()
-        if not host:
-            host = self.configDict['host']
 
-
-        ssh_config = paramiko.SSHConfig()
-        user_config_file = os.path.expanduser("~/.ssh/config")
-
-        try:
-            with open(user_config_file) as f:
-                ssh_config.parse(f)
-        except:
-            logText("Could not parse ~/.ssh/config, does the file exist?")
-            return None
-
-        try:
-            hpcConfig = ssh_config.lookup(host)
-            proxy = paramiko.ProxyCommand(hpcConfig['proxycommand'])
-            assert hpcConfig['hostname']
-            assert hpcConfig['user']
-        except:
-            logText("host configuration seems to be incorrect. the host must be "
-                    "configured to have a hostname, username and proxy command.")
-            return None
-
-        try:
-            client = paramiko.SSHClient()
-            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            client.load_system_host_keys()
-
-            client.connect(hpcConfig['hostname'], username= hpcConfig['user'], sock=proxy)
-            client.get_transport().set_keepalive(15)
-            self.sshAlive = True
-
-            return client
-        except:
-            logText("failed to connect to the hpc, internet not working?")
-            return None
 
     #----------------------------------------------------------------------
     def startup(self, ):
@@ -410,7 +230,7 @@ class JobList(GridLayout):
         time.sleep(0.5)
         self.logText = self.getLogFunction()
 
-        self.ssh = self.sshObjectInit()
+        self.ssh = SshDirect(self.configDict, self.logText)
 
         userHomePath = os.path.expanduser("~/")
         if os.path.isfile(userHomePath + '.jobs.pkl'):
@@ -451,20 +271,10 @@ class JobList(GridLayout):
                 f'You can change the default SSH host using the settings button.')
         if not self.startupped:
             textLog(f'startup will be performed when hpc connection is properly configured.')
-    #----------------------------------------------------------------------
-    def checkHPCConnection(self):
-        """"""
-        check = self.sshCommand('echo gooby')
-        return check
 
-    #----------------------------------------------------------------------
-    def saveConfig(self):
-        """"""
-        logText = self.getLogFunction()
-        logText('saving configuration...')
-        configFile = os.path.expanduser("~/.RRS_config")
-        json.dump(self.configDict, open(configFile, 'w'))
-        logText("saved!")
+
+
+
 
     #----------------------------------------------------------------------
     def openBrowser(self):
@@ -498,19 +308,7 @@ class JobList(GridLayout):
                 del self.currentConnection[i]
         return True
 
-    #----------------------------------------------------------------------
-    def checkJobs(self, loadedRunningJobs):
-        """"""
 
-        qstatTable = self.qstat()
-        if qstatTable:
-            keys = loadedRunningJobs.keys()
-            for i in list(keys):
-                if i not in qstatTable:
-                    del loadedRunningJobs[i]
-            return loadedRunningJobs
-        else:
-            return {}
 
     #----------------------------------------------------------------------
     def drawButtons(self):
@@ -530,13 +328,6 @@ class JobList(GridLayout):
         for i in self.currentButtons.keys():
             self.remove_widget(self.currentButtons[i])
         self.currentButtons = {}
-
-    #----------------------------------------------------------------------
-    def on_runningJobs(self, *args):
-        """"""
-        self.removeButtons()
-        self.drawButtons()
-
     #----------------------------------------------------------------------
     def selectStuff(self, key, instance):
         """"""
@@ -551,15 +342,6 @@ class JobList(GridLayout):
             btn.background_color = (1, 1, 1, 1)
 
     #----------------------------------------------------------------------
-    def startThread(self, function, *args):
-        """"""
-        if args:
-            args = tuple(args)
-        threading.Thread(target = function, args = args).start()
-
-
-
-    #----------------------------------------------------------------------
     def getSelectedJob(self):
         """"""
         if self.selectedJob:
@@ -568,6 +350,8 @@ class JobList(GridLayout):
             logText = self.getLogFunction()
             logText("No project selected, select one first!")
             return 0
+
+
 
 
     #----------------------------------------------------------------------
@@ -589,29 +373,6 @@ class JobList(GridLayout):
                 logText('...Nothing to reconnect to.')
         else:
             self.logText("no hpc connection, cannot reconnect.")
-    #----------------------------------------------------------------------
-    def connectToJob(self, jobNumber):
-        """"""
-        host = self.configDict['host']
-        port = self.runningJobs[jobNumber][0]
-        nodeID = self.runningJobs[jobNumber][2]
-        projectName = self.runningJobs[jobNumber][3]
-        user_config_file = os.path.expanduser("~/.ssh/config")
-        try:
-            tunnel = SSHTunnelForwarder(host,ssh_config_file = user_config_file,
-                                        remote_bind_address = (nodeID, int(port)),
-                                        local_bind_address = ('localhost', int(port)),
-                                        allow_agent = True, ssh_password = '',
-                                        set_keepalive= 10)
-            tunnel.start()
-        except:
-            textLog = self.getLogFunction()
-            textLog(f'Could not create tunnel')
-            return False
-        if jobNumber in self.currentConnection:
-            self.currentConnection[jobNumber][0].close()
-            del self.currentConnection[jobNumber]
-        self.currentConnection[jobNumber] = [tunnel, port, projectName]
 
     #----------------------------------------------------------------------
     def on_currentConnection(self, instance, value):
@@ -630,16 +391,31 @@ class JobList(GridLayout):
     #----------------------------------------------------------------------
     def getLogFunction(self):
         """"""
-        return self.parent.parent.ids.logOutputLabel.logText
+        return self.ids.logOutputLabel.logText
+
+    #----------------------------------------------------------------------
+    def checkJobs(self, loadedRunningJobs):
+        """"""
+
+        qstatTable = self.qstat()
+        if qstatTable:
+            keys = loadedRunningJobs.keys()
+            for i in list(keys):
+                if i not in qstatTable:
+                    del loadedRunningJobs[i]
+            return loadedRunningJobs
+        else:
+            return {}
 
 
 
-#ROOT WIDGET
-class RootWidget(BoxLayout):
-    """"""
-    logOutputLabel = ObjectProperty(None)
+    #----------------------------------------------------------------------
+    def on_runningJobs(self, *args):
+        """"""
+        self.removeButtons()
+        self.drawButtons()
 
-
+#----------------------------------------------------------------------
 class SplashScreen(Screen):
     def skip(self, *args):
         self.parent.current = "mscreen"
@@ -684,3 +460,10 @@ class RRSApp(App):
 
 if __name__ == '__main__':
     RRSApp().run()
+
+
+
+
+
+
+

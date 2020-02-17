@@ -601,9 +601,11 @@ class JobList(GridLayout):
                 memory = 8
             vmem = f"{memory}G"
             port = str(random.randint(8787, 10000))
-            if not cpus:
-                cpus = 1
-            cps = f'-pe threaded {cpus} '
+            if not cpus or int(cpus) == 1:
+                cps = ''  # do not use -pe threaded 1, it makes a mess due to sge bug
+            else:
+                cps = f'-pe threaded {cpus} '  # use -pe threaded n if there's more than 1 cpu
+
             qsub = 'qsub -b yes -cwd -V -q all.q -N singInstance '
             qrunCommand = f"{qsub} -l h_rt={duration} -l h_vmem={vmem} {cps}"
             rserverOptions = f"--www-port={port} --auth-minimum-user-id=100 --server-set-umask=0"
@@ -824,7 +826,7 @@ class GuiApp(App):
     def build(self):
         """Constructor"""
         self.icon = 'RRS_logo.png'
-        self.title = 'Rstudio Reproducibility Suite V0.1'
+        self.title = 'Rstudio Reproducibility Suite V0.1.1 (pe threaded fix)'
 
         return SplScreenManager()
 

@@ -3,3 +3,5 @@ dist/
 __pychache__
 *.simg
 *.png
+*.pyc
+.DS_*

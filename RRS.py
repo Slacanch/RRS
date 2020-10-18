@@ -633,7 +633,7 @@ class JobList(GridLayout):
             if queue == 'sge':
                 if not duration:
                     duration = '1'
-                duration = f'{duration}::'
+                durationTxt = f'{duration}::'
                 if not memory:
                     memory = 8
                 vmem = f"{memory}G"
@@ -644,7 +644,7 @@ class JobList(GridLayout):
                     cps = f'-pe threaded {cpus} '  # use -pe threaded n if there's more than 1 cpu
     
                 qsub = 'qsub -b yes -cwd -V -q all.q -N singInstance '
-                qrunCommand = f"{qsub} -l h_rt={duration} -l h_vmem={vmem} {cps}"
+                qrunCommand = f"{qsub} -l h_rt={durationTxt} -l h_vmem={vmem} {cps}"
                 rserverOptions = f"--www-port={port} --auth-minimum-user-id=100 --server-set-umask=0"
                 exCommand = (f'{qrunCommand} "singularity exec '
                              f'-B {cookiesPath}:/tmp '
@@ -654,7 +654,7 @@ class JobList(GridLayout):
             elif queue == 'slurm':
                 if not duration:
                     duration = '1'
-                duration = f'{duration}:0:0'
+                durationTxt = f'{duration}:0:0'
                 if not memory:
                     memory = 8
                 vmem = f"{memory}G"
@@ -665,7 +665,7 @@ class JobList(GridLayout):
                     cps = f'-c {cpus} '  
     
                 qsub = 'sbatch  --export=ALL --job-name=singInstance '
-                qrunCommand = f"{qsub} --time={duration} --mem={vmem} {cps}"
+                qrunCommand = f"{qsub} --time={durationTxt} --mem={vmem} {cps}"
                 rserverOptions = f"--www-port={port} --auth-minimum-user-id=100 --server-set-umask=0"
                 exCommand = (f'{qrunCommand} --wrap="singularity exec '
                                            f'-B {cookiesPath}:/tmp '
@@ -701,7 +701,7 @@ class JobList(GridLayout):
                 elif qstatTable[jobNumber][0] == 'r':
                     nodeID = qstatTable[jobNumber][1]
 
-            self.updateRunningJobs(project, port, duration[0], nodeID, jobNumber)
+            self.updateRunningJobs(project, port, duration, nodeID, jobNumber)
             userHomePath = os.path.expanduser("~/")
             pickle.dump(dict(self.runningJobs), open(userHomePath + '.jobs.pkl', 'wb') )
 
@@ -911,7 +911,7 @@ class GuiApp(App):
     def build(self):
         """Constructor"""
         self.icon = 'RRS_logo.png'
-        self.title = 'Rstudio Reproducibility Suite V0.1.1 (pe threaded fix)'
+        self.title = 'Rstudio Reproducibility Suite V0.2.0 (Slurm Support)'
 
         return SplScreenManager()
 

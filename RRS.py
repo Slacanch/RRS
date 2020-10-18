@@ -107,6 +107,14 @@ Builder.load_string("""
             on_press: root.hpcReconnect()
         GridLayout:
             cols: 2
+            Button:
+                id: help
+                text: 'Slurm'
+                on_press: root.setSlurmQueue()
+            Button:
+                id: help
+                text: 'SGE'
+                on_press: root.setSGEQueue()
             Label:
                 text: "Path to project folders"
             TextInput:
@@ -138,7 +146,7 @@ Builder.load_string("""
         Label:
             id: connectionText
             size_hint: 1, 0.4
-            text: "YOU ARE NOT CONNECTED"
+            text: "No tunnels"
         GridLayout:
             cols: 5
             size_hint: 1, 0.3
@@ -220,10 +228,12 @@ def readConfig():
 
         return confDict
     else:
+        defaultQueueSystem = 'slurm'
         defaultSSHHost = 'hpc'
         defaultProjectPath = '/hpc/pmc_gen/rstudio/'
         defaultImg = 'rstudio.simg'
-        confDict = {'host': defaultSSHHost,
+        confDict = {'queue' : defaultQueueSystem,
+                    'host': defaultSSHHost,
                     'projectPath': defaultProjectPath,
                     'imgName': defaultImg,}
 
@@ -232,11 +242,15 @@ def readConfig():
 class ConfigPopup(Popup):
     """"""
 
+    queue = ObjectProperty(None)
     projectPath = ObjectProperty(None)
     host = ObjectProperty(None)
     imgName = ObjectProperty(None)
 
     currConfig = readConfig()
+    if 'currQueue' not in currConfig:
+        currConfig['queue'] = 'slurm'
+    currQueue = StringProperty(currConfig['queue'])
     currProjectPath = StringProperty(currConfig['projectPath'])
     currHost = StringProperty(currConfig['host'])
     currImgName = StringProperty(currConfig['imgName'])
@@ -252,7 +266,8 @@ class ConfigPopup(Popup):
         """"""
 
         currConfigDict = self.currConfig
-        newConfigDict = {'host': self.host.text,
+        newConfigDict = {'queue': self.currConfig['queue'],
+                         'host': self.host.text,
                          'projectPath': self.projectPath.text,
                          'imgName': self.imgName.text,}
         if newConfigDict['host']:
@@ -281,6 +296,16 @@ class ConfigPopup(Popup):
         if not self.joblist.startupped:
             self.joblist.startThread(self.joblist.startup)
         self.dismiss()
+
+    #----------------------------------------------------------------------
+    def setSlurmQueue(self):
+        """"""
+        self.currQueue = 'slurm'
+    
+    #----------------------------------------------------------------------
+    def setSGEQueue(self):
+        """"""
+        self.currQueue = 'sge'  
 
     #----------------------------------------------------------------------
     def openHelp(self):
@@ -336,7 +361,15 @@ class JobList(GridLayout):
         self.sshAlive = False
         self.resPop = ResourcePopup(self)
         self.confOpen = ConfigPopup(self, self.configDict)
-
+        
+        # check which queue checking to use
+        if self.configDict['queue'] == 'sge':
+            self.checkQueue = self.qstat
+        if self.configDict['queue'] == 'slurm':
+            self.checkQueue = self.slurmStat
+        else:
+            raise('lolwat?')
+        
         self.startThread(self.startup)
 
     #----------------------------------------------------------------------
@@ -516,7 +549,7 @@ class JobList(GridLayout):
     def checkJobs(self, loadedRunningJobs):
         """"""
 
-        qstatTable = self.qstat()
+        qstatTable = self.checkQueue()
         if qstatTable:
             keys = loadedRunningJobs.keys()
             for i in list(keys):
@@ -583,6 +616,7 @@ class JobList(GridLayout):
         """"""
         if self.sshAlive:
             logText = self.getLogFunction()
+            queue = self.configDict['queue']
             projectPath = self.configDict['projectPath']
             imgName = self.configDict['imgName']
             cookiesPath = f'{projectPath}{project}/cookies'
@@ -593,35 +627,58 @@ class JobList(GridLayout):
                 logText(f'folder {homePath} or {cookiesPath} does not exist, '
                         f'make sure to create them!')
                 return False
-
-            if not duration:
-                duration = '1'
-            duration = f'{duration}::'
-            if not memory:
-                memory = 8
-            vmem = f"{memory}G"
-            port = str(random.randint(8787, 10000))
-            if not cpus or int(cpus) == 1:
-                cps = ''  # do not use -pe threaded 1, it makes a mess due to sge bug
-            else:
-                cps = f'-pe threaded {cpus} '  # use -pe threaded n if there's more than 1 cpu
-
-            qsub = 'qsub -b yes -cwd -V -q all.q -N singInstance '
-            qrunCommand = f"{qsub} -l h_rt={duration} -l h_vmem={vmem} {cps}"
-            rserverOptions = f"--www-port={port} --auth-minimum-user-id=100 --server-set-umask=0"
-            exCommand = (f'{qrunCommand} "singularity exec '
-                         f'-B {cookiesPath}:/tmp '
-                         f'-H {homePath} '
-                         f'{imagePath} '
-                         f'rserver {rserverOptions} "')
-
+            
+            # CONSTRUCTING COMMANDS
+            # SGE
+            if queue == 'sge':
+                if not duration:
+                    duration = '1'
+                duration = f'{duration}::'
+                if not memory:
+                    memory = 8
+                vmem = f"{memory}G"
+                port = str(random.randint(8787, 10000))
+                if not cpus or int(cpus) == 1:
+                    cps = ''  # do not use -pe threaded 1, it makes a mess due to sge bug
+                else:
+                    cps = f'-pe threaded {cpus} '  # use -pe threaded n if there's more than 1 cpu
+    
+                qsub = 'qsub -b yes -cwd -V -q all.q -N singInstance '
+                qrunCommand = f"{qsub} -l h_rt={duration} -l h_vmem={vmem} {cps}"
+                rserverOptions = f"--www-port={port} --auth-minimum-user-id=100 --server-set-umask=0"
+                exCommand = (f'{qrunCommand} "singularity exec '
+                             f'-B {cookiesPath}:/tmp '
+                             f'-H {homePath} '
+                             f'{imagePath} '
+                             f'rserver {rserverOptions} "')
+            elif queue == 'slurm':
+                if not duration:
+                    duration = '1'
+                duration = f'{duration}:0:0'
+                if not memory:
+                    memory = 8
+                vmem = f"{memory}G"
+                port = str(random.randint(8787, 10000))
+                if not cpus:
+                    cps = '-c 1'  
+                else:
+                    cps = f'-c {cpus} '  
+    
+                qsub = 'sbatch  --export=ALL --job-name=singInstance '
+                qrunCommand = f"{qsub} --time={duration} --mem={vmem} {cps}"
+                rserverOptions = f"--www-port={port} --auth-minimum-user-id=100 --server-set-umask=0"
+                exCommand = (f'{qrunCommand} --wrap="singularity exec '
+                                           f'-B {cookiesPath}:/tmp '
+                                           f'-H {homePath} '
+                                           f'{imagePath} '
+                                           f'rserver {rserverOptions} "')                
 
 
             logText('submitting: ' + exCommand + "\n")# self.startThread(logText, 'submitting: ' + sshCommand)  #
             jobOutput = self.sshCommand(exCommand)
             logText(jobOutput)
 
-            jobNumberPattern = re.compile("Your job (\d+) ")
+            jobNumberPattern = re.compile(".+? job (\d+)")
             jobNumber = jobNumberPattern.search(jobOutput).group(1)
 
             logText(f'Job number is {jobNumber}, waiting for job to run...\n')
@@ -635,7 +692,7 @@ class JobList(GridLayout):
                     time.sleep(10)
                     logText(f'job is still in queue...\n')
 
-                qstatTable = self.qstat()
+                qstatTable = self.checkQueue()
 
                 if jobNumber not in qstatTable:
                     logText('the submitted job is no longer in the queue, '
@@ -678,6 +735,31 @@ class JobList(GridLayout):
         return qstatTable
 
     #----------------------------------------------------------------------
+    def slurmStat(self):
+        """"""
+        #user = self.sshCommand('echo $USER')
+        qstatOutput = self.sshCommand('squeue -u $USER')
+        qstatList = qstatOutput.split("\n")[1:]
+
+        sbatchTable = {}
+        for job in qstatList:
+            if job == '' :
+                continue
+            fields = job.split()
+            number = fields[0]
+            state = fields[4].lower() # turning to lower allows same logic to work for both sge and slurm
+            node = fields[7]
+
+            if state == 'r':
+                nodeID = node
+            else:
+                nodeID = ''
+
+            sbatchTable[number] = [state, nodeID]
+
+        return sbatchTable        
+
+    #----------------------------------------------------------------------
     def updateRunningJobs(self, name, port, timeReq, nodeID, jobNumber):
         """"""
         stopTime = datetime.now() + timedelta(hours= int(timeReq))
@@ -713,9 +795,12 @@ class JobList(GridLayout):
             selectedJobN = self.getSelectedJob()
             if selectedJobN:
                 logText = self.getLogFunction()
-                qstatTable = self.qstat()
+                qstatTable = self.checkQueue()
                 if selectedJobN in qstatTable and qstatTable[selectedJobN][0] == 'r':
-                    command = f'qdel {selectedJobN}'
+                    if self.configDict['queue'] == 'sge':
+                        command = f'qdel {selectedJobN}'
+                    elif self.configDict['queue'] == 'slurm':
+                        command = f'scancel {selectedJobN}'
                     commandOutput = self.sshCommand(command)
                     logText(commandOutput)
                 else:
@@ -776,11 +861,11 @@ class JobList(GridLayout):
             tempText = ''
             for jobNumber in value:
                 connection = value[jobNumber]
-                tempText += f'YOU ARE CONNECTED TO {connection[2]} ON PORT {connection[1]}\n'
+                tempText += f'SSH tunnel  established to project  {connection[2]} on port {connection[1]}\n'
             self.parent.parent.ids.connectionText.text = tempText
             self.parent.parent.ids.connectionText.background_color = 0.5, 0, 0, 1
         else:
-            self.parent.parent.ids.connectionText.text = "YOU ARE NOT CONNECTED"
+            self.parent.parent.ids.connectionText.text = "no SSH tunnel established"
             self.parent.parent.ids.connectionText.background_color = 1, 1, 1, 1
 
     #----------------------------------------------------------------------

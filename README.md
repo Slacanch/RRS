@@ -1,3 +1,7 @@
+# Current development
+
+RRS is a prototype and currently undergoing development somewhere else. will update here once we manage to get it to the state we want!
+
 # Rstudio Reproducibility Suite
 
 RRS is a graphical interface macOS app that allows users to work with Rstudio in a reproducible manner in the context of a Sun Grid Engine (SGE) cluster environment. 
